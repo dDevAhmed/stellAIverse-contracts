@@ -850,6 +850,80 @@ fn test_execute_parameter_change_proposal() {
 }
 
 #[test]
+fn test_execute_parameter_change_proposal_cannot_run_twice() {
+    let e = Env::default();
+    e.mock_all_auths();
+    e.ledger().set(LedgerInfo {
+        timestamp: 1000,
+        protocol_version: 20,
+        sequence_number: 10,
+        network_id: Default::default(),
+        base_reserve: 10,
+        max_entry_ttl: 31536000,
+        min_persistent_entry_ttl: 2592000,
+        min_temp_entry_ttl: 16,
+    });
+
+    let (gov_client, admin, governance_token, token_client) = setup_governance(&e);
+    let proposer = Address::generate(&e);
+    let voter = Address::generate(&e);
+
+    e.mock_all_auths();
+    token_client.mint(&proposer, &10000);
+    token_client.mint(&voter, &50000);
+
+    gov_client.update_circulating_voting_power(&admin, &100000u128);
+
+    let target_contract = e.register_contract(None, MockTargetContract);
+    let params = ProposalParameters {
+        name: String::from_str(&e, "fee_rate"),
+        value: String::from_str(&e, "500"),
+    };
+
+    let voting_period = 7 * 24 * 60 * 60;
+    let proposal_id = gov_client.create_proposal(
+        &proposer,
+        &String::from_str(&e, "Change Fee"),
+        &String::from_str(&e, "Update fee rate"),
+        &voting_period,
+        &ProposalType::ParameterChange,
+        &Some(params),
+        &Some(target_contract),
+        &Some(Symbol::new(&e, "update_parameter")),
+        &None::<Vec<Val>>,
+    );
+
+    gov_client.cast_vote(&voter, &proposal_id, &VoteType::For);
+
+    e.ledger().set(LedgerInfo {
+        timestamp: 1000 + voting_period + 1,
+        protocol_version: 20,
+        sequence_number: 20,
+        network_id: Default::default(),
+        base_reserve: 10,
+        max_entry_ttl: 31536000,
+        min_persistent_entry_ttl: 2592000,
+        min_temp_entry_ttl: 16,
+    });
+
+    gov_client.update_proposal_status(&proposal_id);
+
+    let executor = Address::generate(&e);
+    gov_client.execute_proposal(&executor, &proposal_id);
+
+    let proposal = gov_client.get_proposal(&proposal_id).unwrap();
+    assert_eq!(proposal.status, ProposalStatus::Executed);
+
+    let second_attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        gov_client.execute_proposal(&executor, &proposal_id);
+    }));
+    assert!(second_attempt.is_err(), "second execution must fail");
+
+    let proposal = gov_client.get_proposal(&proposal_id).unwrap();
+    assert_eq!(proposal.status, ProposalStatus::Executed);
+}
+
+#[test]
 #[should_panic(expected = "Proposal has not passed")]
 fn test_execute_before_passing() {
     let e = Env::default();

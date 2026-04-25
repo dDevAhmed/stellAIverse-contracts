@@ -320,12 +320,25 @@ impl Governance {
             panic!("Insufficient voting power to delegate");
         }
 
+        if let Some(expiry) = expires_at {
+            if expiry <= current_time {
+                panic!("Delegation expiry must be in the future");
+            }
+        }
+
+        let delegation = Delegation {
+            delegatee: delegatee.clone(),
+            amount,
+            created_at: current_time,
+            expires_at,
+            active: true,
         };
+
         set_delegation(&env, &delegator, &delegation);
 
         env.events().publish(
             (Symbol::new(&env, "VotingPowerDelegated"),),
-
+            (delegator, delegatee, amount),
         );
     }
 
@@ -658,6 +671,11 @@ impl Governance {
 
         let mut proposal = get_proposal(&env, proposal_id).expect("Proposal not found");
 
+        // Reject proposals that already completed execution.
+        if proposal.status == ProposalStatus::Executed {
+            panic!("Proposal already executed");
+        }
+
         // Check if proposal has passed
         if proposal.status != ProposalStatus::Passed {
             panic!("Proposal has not passed");
@@ -683,6 +701,12 @@ impl Governance {
                 panic!("Approval threshold not met");
             }
         }
+
+        // Persist the execution state before calling out to the target contract.
+        // This prevents a target contract from re-entering governance and
+        // executing the same proposal twice inside the same transaction.
+        proposal.status = ProposalStatus::Executed;
+        set_proposal(&env, &proposal);
 
         // Execute proposal based on type
         match &proposal.proposal_type {
@@ -774,10 +798,6 @@ impl Governance {
                 }
             }
         }
-
-        // Mark as executed
-        proposal.status = ProposalStatus::Executed;
-        set_proposal(&env, &proposal);
 
         // Return proposal deposit to proposer (if proposal passed and executed)
         let min_deposit = get_min_proposal_deposit(&env);
