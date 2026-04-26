@@ -1,7 +1,7 @@
 #![no_std]
 use soroban_sdk::{contracttype, Address, Env, Vec};
 
-use crate::types::{Delegation, DelegationSnapshot, Proposal, Vote, VoteEscrow, VotingMechanism, WaitlistProposal};
+use crate::types::{Delegation, DelegationSnapshot, MultisigApproval, MultisigConfig, Proposal, Vote, VoteEscrow, VotingMechanism, WaitlistProposal};
 
 #[contracttype]
 #[derive(Clone)]
@@ -42,6 +42,10 @@ pub enum DataKey {
     MinProposalDeposit,
     /// Circulating voting power (cached for efficiency)
     CirculatingVotingPower,
+    /// Multisig approval for a proposal
+    MultisigApproval(u64),
+    /// Multisig configuration
+    MultisigConfig,
 }
 
 /* ---------------- ADMIN ---------------- */
@@ -347,4 +351,57 @@ pub fn get_circulating_voting_power(env: &Env) -> Option<u128> {
     env.storage()
         .instance()
         .get(&DataKey::CirculatingVotingPower)
+}
+
+/* ---------------- MULTISIG GOVERNANCE ---------------- */
+
+pub fn set_multisig_config(env: &Env, config: &MultisigConfig) {
+    env.storage()
+        .instance()
+        .set(&DataKey::MultisigConfig, config);
+}
+
+pub fn get_multisig_config(env: &Env) -> Option<MultisigConfig> {
+    env.storage()
+        .instance()
+        .get(&DataKey::MultisigConfig)
+}
+
+pub fn set_multisig_approval(env: &Env, proposal_id: u64, approval: &MultisigApproval) {
+    env.storage()
+        .instance()
+        .set(&DataKey::MultisigApproval(proposal_id), approval);
+}
+
+pub fn get_multisig_approval(env: &Env, proposal_id: u64) -> Option<MultisigApproval> {
+    env.storage()
+        .instance()
+        .get(&DataKey::MultisigApproval(proposal_id))
+}
+
+pub fn remove_multisig_approval(env: &Env, proposal_id: u64) {
+    env.storage()
+        .instance()
+        .remove(&DataKey::MultisigApproval(proposal_id));
+}
+
+/// Check if an address is an authorized multisig signer
+pub fn is_authorized_signer(env: &Env, signer: &Address) -> bool {
+    if let Some(config) = get_multisig_config(env) {
+        if !config.enabled {
+            return false;
+        }
+        
+        for i in 0..config.authorized_signers.len() {
+            if config.authorized_signers.get(i).unwrap() == *signer {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Check if multisig approval has reached threshold
+pub fn has_reached_threshold(approval: &MultisigApproval) -> bool {
+    approval.approvers.len() >= approval.required_approvals
 }

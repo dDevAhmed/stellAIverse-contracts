@@ -31,6 +31,7 @@ pub enum Error {
     KycSubjectNotFound = 15,
     KycInvalidTransition = 16,
     KycTerminalState = 17,
+    KycRequestExpired = 18,
 }
 
 // ── KYC State Machine (issues #147 & #148) ──────────────────────────────────
@@ -58,6 +59,10 @@ pub struct KycRecord {
     pub updated_at: u64,
     /// Set when status reaches a terminal state (Verified / Rejected).
     pub finalized_at: Option<u64>,
+    /// Timestamp when the KYC request was created (for Pending state).
+    pub created_at: u64,
+    /// Expiry timestamp for pending requests. None means no expiry.
+    pub expires_at: Option<u64>,
 }
 
 const KYC_RECORDS: Symbol = symbol_short!("kyc_rec");
@@ -148,6 +153,8 @@ const MAX_FINDINGS_PER_REPORT: u32 = 50;
 const REPUTATION_DECAY_PERIOD: u64 = 30 * 24 * 60 * 60; // 30 days
 const MIN_RATING: u32 = 1;
 const MAX_RATING: u32 = 5;
+/// Default expiry period for pending KYC requests (90 days)
+const KYC_PENDING_EXPIRY_SECS: u64 = 90 * 24 * 60 * 60;
 
 #[contract]
 pub struct ComplianceIntegrationContract;
@@ -640,6 +647,8 @@ impl ComplianceIntegrationContract {
             updated_by: operator.clone(),
             updated_at: now,
             finalized_at: None,
+            created_at: now,
+            expires_at: Some(now + KYC_PENDING_EXPIRY_SECS),
         };
         env.storage().instance().set(&key, &record);
         env.events().publish(
@@ -652,6 +661,7 @@ impl ComplianceIntegrationContract {
     /// Advance the KYC state following the strict transition table.
     /// Allowed: Pending→InReview, InReview→Verified, InReview→Rejected.
     /// Terminal states (Verified, Rejected) are immutable without governance override.
+    /// Pending requests that have expired cannot be transitioned.
     pub fn kyc_transition(
         env: Env,
         operator: Address,
@@ -665,6 +675,21 @@ impl ComplianceIntegrationContract {
             .instance()
             .get(&key)
             .ok_or(Error::KycSubjectNotFound)?;
+
+        // Check if pending request has expired (issue: KYC expiry)
+        if record.status == KycStatus::Pending {
+            if let Some(expires_at) = record.expires_at {
+                let now = env.ledger().timestamp();
+                if now >= expires_at {
+                    // Emit expiry event before rejecting
+                    env.events().publish(
+                        (Symbol::new(&env, "kyc"), Symbol::new(&env, "expired")),
+                        (subject_did.clone(), expires_at),
+                    );
+                    return Err(Error::KycRequestExpired);
+                }
+            }
+        }
 
         // Reject mutations of terminal states (issue #147).
         if record.status == KycStatus::Verified || record.status == KycStatus::Rejected {
@@ -904,6 +929,104 @@ mod tests {
             let rec = ComplianceIntegrationContract::kyc_get(env.clone(), subject.clone()).unwrap();
             assert_eq!(rec.status, KycStatus::Pending);
             assert!(rec.finalized_at.is_none());
+        });
+    }
+
+    #[test]
+    fn test_kyc_expired_request_cannot_transition() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract_id, admin) = setup(&env);
+        let subject = String::from_str(&env, "did:stellar:subject5");
+
+        env.as_contract(&contract_id, || {
+            ComplianceIntegrationContract::kyc_init(
+                env.clone(),
+                admin.clone(),
+                subject.clone(),
+            )
+            .unwrap();
+
+            // Advance time past expiry (90 days + 1 second)
+            env.ledger().with_mut_ledger_info(|li| {
+                li.timestamp += KYC_PENDING_EXPIRY_SECS + 1;
+            });
+
+            // Should fail with KycRequestExpired
+            let err = ComplianceIntegrationContract::kyc_transition(
+                env.clone(),
+                admin.clone(),
+                subject.clone(),
+                KycStatus::InReview,
+            )
+            .unwrap_err();
+            assert_eq!(err, Error::KycRequestExpired);
+        });
+    }
+
+    #[test]
+    fn test_kyc_boundary_exact_expiry_time() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract_id, admin) = setup(&env);
+        let subject = String::from_str(&env, "did:stellar:subject6");
+
+        env.as_contract(&contract_id, || {
+            ComplianceIntegrationContract::kyc_init(
+                env.clone(),
+                admin.clone(),
+                subject.clone(),
+            )
+            .unwrap();
+
+            // Advance time to exactly expiry moment
+            env.ledger().with_mut_ledger_info(|li| {
+                li.timestamp += KYC_PENDING_EXPIRY_SECS;
+            });
+
+            // At exact expiry time, should fail (now >= expires_at)
+            let err = ComplianceIntegrationContract::kyc_transition(
+                env.clone(),
+                admin.clone(),
+                subject.clone(),
+                KycStatus::InReview,
+            )
+            .unwrap_err();
+            assert_eq!(err, Error::KycRequestExpired);
+        });
+    }
+
+    #[test]
+    fn test_kyc_valid_before_expiry() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract_id, admin) = setup(&env);
+        let subject = String::from_str(&env, "did:stellar:subject7");
+
+        env.as_contract(&contract_id, || {
+            ComplianceIntegrationContract::kyc_init(
+                env.clone(),
+                admin.clone(),
+                subject.clone(),
+            )
+            .unwrap();
+
+            // Advance time to just before expiry (90 days - 1 second)
+            env.ledger().with_mut_ledger_info(|li| {
+                li.timestamp += KYC_PENDING_EXPIRY_SECS - 1;
+            });
+
+            // Should succeed - still within valid period
+            ComplianceIntegrationContract::kyc_transition(
+                env.clone(),
+                admin.clone(),
+                subject.clone(),
+                KycStatus::InReview,
+            )
+            .unwrap();
+
+            let rec = ComplianceIntegrationContract::kyc_get(env.clone(), subject.clone()).unwrap();
+            assert_eq!(rec.status, KycStatus::InReview);
         });
     }
 }

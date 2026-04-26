@@ -154,3 +154,35 @@ pub struct WaitlistProposal {
     pub deposit_amount: u128,
     pub submitted_at: u64,
 }
+
+/// Multi-signature approval for high-risk governance actions
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MultisigApproval {
+    /// Proposal ID being approved
+    pub proposal_id: u64,
+    /// List of approvers who have signed
+    pub approvers: Vec<Address>,
+    /// Required number of approvals (threshold)
+    pub required_approvals: u32,
+    /// Timestamp when approval was created
+    pub created_at: u64,
+    /// Timestamp when approval expires
+    pub expires_at: u64,
+    /// Whether the approval has been executed
+    pub executed: bool,
+}
+
+/// Configuration for multisig governance
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MultisigConfig {
+    /// Minimum number of signatures required
+    pub threshold: u32,
+    /// List of authorized signers
+    pub authorized_signers: Vec<Address>,
+    /// Approval validity period in seconds
+    pub approval_validity_secs: u64,
+    /// Whether multisig is enabled for this contract
+    pub enabled: bool,
+}

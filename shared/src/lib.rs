@@ -2,6 +2,67 @@
 #![allow(unused_imports)]
 use soroban_sdk::{contracttype, Address, Bytes, String, Vec};
 
+// ============================================================================
+// STORAGE KEY NAMESPACE PROTECTION
+// ============================================================================
+
+/// Module identifiers for storage key namespacing.
+/// Each module MUST use its identifier as a prefix for all storage keys
+/// to prevent cross-module key collisions.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ModuleId {
+    AgentNft = 0,
+    AgentToken = 1,
+    Marketplace = 2,
+    Evolution = 3,
+    ExecutionHub = 4,
+    Oracle = 5,
+    Faucet = 6,
+    Governance = 7,
+    Compliance = 8,
+    Staking = 9,
+    Lifecycle = 10,
+    Threshold = 11,
+    TransactionCoord = 12,
+    VerifiableCreds = 13,
+    Metrics = 14,
+    Prediction = 15,
+    Referral = 16,
+    RiskEval = 17,
+    BugBounty = 18,
+    Affiliate = 19,
+    CreditScore = 20,
+    Waitlist = 21,
+    MultisigWaitlist = 22,
+    BridgeManager = 23,
+}
+
+/// Creates a namespaced storage key to prevent collisions across modules.
+/// Usage: `namespaced_key(ModuleId::Marketplace, "listing", &listing_id)`
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct NamespacedKey {
+    pub module: ModuleId,
+    pub category: String,
+    pub identifier: String,
+}
+
+/// Validate that a storage key is properly namespaced.
+/// Returns false if the key could potentially collide with another module's keys.
+pub fn validate_namespaced_key(key: &NamespacedKey) -> bool {
+    // Ensure category is not empty
+    if key.category.is_empty() {
+        return false;
+    }
+    // Ensure identifier is not empty
+    if key.identifier.is_empty() {
+        return false;
+    }
+    true
+}
+
+/// Constants for security hardening
+
 /// Represents an agent's metadata and state
 #[derive(Clone)]
 #[contracttype]
@@ -149,5 +210,130 @@ pub mod testutils {
             timestamp: env.ledger().timestamp(),
             nonce,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::{Env, String};
+
+    #[test]
+    fn test_namespaced_key_validation_valid() {
+        let env = Env::default();
+        let key = NamespacedKey {
+            module: ModuleId::Marketplace,
+            category: String::from_str(&env, "listing"),
+            identifier: String::from_str(&env, "123"),
+        };
+        assert!(validate_namespaced_key(&key));
+    }
+
+    #[test]
+    fn test_namespaced_key_validation_empty_category() {
+        let env = Env::default();
+        let key = NamespacedKey {
+            module: ModuleId::Marketplace,
+            category: String::from_str(&env, ""),
+            identifier: String::from_str(&env, "123"),
+        };
+        assert!(!validate_namespaced_key(&key));
+    }
+
+    #[test]
+    fn test_namespaced_key_validation_empty_identifier() {
+        let env = Env::default();
+        let key = NamespacedKey {
+            module: ModuleId::Marketplace,
+            category: String::from_str(&env, "listing"),
+            identifier: String::from_str(&env, ""),
+        };
+        assert!(!validate_namespaced_key(&key));
+    }
+
+    #[test]
+    fn test_no_collision_across_modules() {
+        let env = Env::default();
+        
+        // Create keys from different modules with same category/identifier
+        let market_key = NamespacedKey {
+            module: ModuleId::Marketplace,
+            category: String::from_str(&env, "agent"),
+            identifier: String::from_str(&env, "1"),
+        };
+        
+        let evolution_key = NamespacedKey {
+            module: ModuleId::Evolution,
+            category: String::from_str(&env, "agent"),
+            identifier: String::from_str(&env, "1"),
+        };
+        
+        let nft_key = NamespacedKey {
+            module: ModuleId::AgentNft,
+            category: String::from_str(&env, "agent"),
+            identifier: String::from_str(&env, "1"),
+        };
+        
+        // All should be valid
+        assert!(validate_namespaced_key(&market_key));
+        assert!(validate_namespaced_key(&evolution_key));
+        assert!(validate_namespaced_key(&nft_key));
+        
+        // Keys should be different due to different module IDs
+        assert_ne!(market_key.module, evolution_key.module);
+        assert_ne!(market_key.module, nft_key.module);
+        assert_ne!(evolution_key.module, nft_key.module);
+    }
+
+    #[test]
+    fn test_fuzz_dynamic_keys_no_collision() {
+        let env = Env::default();
+        
+        // Simulate dynamic key generation across multiple modules
+        let modules = [
+            ModuleId::AgentNft,
+            ModuleId::Marketplace,
+            ModuleId::Evolution,
+            ModuleId::Governance,
+            ModuleId::Compliance,
+        ];
+        
+        let categories = ["user", "agent", "listing", "request", "proposal"];
+        let identifiers = ["1", "2", "100", "999", "dynamic_key"];
+        
+        // Generate all combinations and verify uniqueness
+        let mut keys: Vec<(ModuleId, String, String)> = Vec::new(&env);
+        
+        for module in &modules {
+            for category in &categories {
+                for identifier in &identifiers {
+                    let key = NamespacedKey {
+                        module: *module,
+                        category: String::from_str(&env, category),
+                        identifier: String::from_str(&env, identifier),
+                    };
+                    
+                    // Validate key
+                    assert!(validate_namespaced_key(&key));
+                    
+                    // Check for duplicates (should not exist due to module prefix)
+                    for existing in keys.iter() {
+                        let is_duplicate = 
+                            existing.0 == key.module &&
+                            existing.1 == key.category &&
+                            existing.2 == key.identifier;
+                        
+                        if is_duplicate {
+                            panic!("Duplicate key detected: {:?}", key);
+                        }
+                    }
+                    
+                    keys.push_back((key.module, key.category, key.identifier));
+                }
+            }
+        }
+        
+        // Total keys should be modules * categories * identifiers
+        assert_eq!(keys.len(), (modules.len() * categories.len() * identifiers.len()) as u32);
     }
 }

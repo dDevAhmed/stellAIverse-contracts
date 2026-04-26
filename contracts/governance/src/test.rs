@@ -1210,3 +1210,65 @@ fn test_vote_weight_calculation_edge_cases() {
     // Base: 0 (1 token locked), Escrow: 1 * 40000 / 10000 = 4
     assert_eq!(power, 4);
 }
+
+#[test]
+fn test_multisig_initialization() {
+    let e = Env::default();
+    let (gov_client, admin, governance_token, token_client) = setup_governance(&e);
+
+    // Create authorized signers
+    let signer1 = Address::generate(&e);
+    let signer2 = Address::generate(&e);
+    let signer3 = Address::generate(&e);
+
+    let mut signers = Vec::new(&e);
+    signers.push_back(signer1.clone());
+    signers.push_back(signer2.clone());
+    signers.push_back(signer3.clone());
+
+    e.mock_all_auths();
+    gov_client.init_multisig(&admin, &2, &signers, &86400);
+
+    let config = gov_client.get_multisig_config();
+    assert!(config.is_some());
+}
+
+#[test]
+fn test_multisig_approval_tracking() {
+    let e = Env::default();
+    let (gov_client, admin, governance_token, token_client) = setup_governance(&e);
+
+    // Setup multisig
+    let signer1 = Address::generate(&e);
+    let signer2 = Address::generate(&e);
+
+    let mut signers = Vec::new(&e);
+    signers.push_back(signer1.clone());
+    signers.push_back(signer2.clone());
+
+    e.mock_all_auths();
+    gov_client.init_multisig(&admin, &2, &signers, &86400);
+
+    // Create a proposal
+    token_client.mint(&admin, &10000);
+    let proposal_id = gov_client.create_proposal(
+        &admin,
+        &String::from_str(&e, "Test"),
+        &String::from_str(&e, "Desc"),
+        &(7 * 24 * 60 * 60),
+        &ProposalType::ParameterChange,
+        &Some(ProposalParameters {
+            name: String::from_str(&e, "param"),
+            value: String::from_str(&e, "value"),
+        }),
+        &None,
+        &None,
+        &None,
+    );
+
+    // Signer1 approves
+    gov_client.approve_proposal_execution(&signer1, &proposal_id);
+
+    let approval = gov_client.get_multisig_approval_status(&proposal_id);
+    assert!(approval.is_some());
+}

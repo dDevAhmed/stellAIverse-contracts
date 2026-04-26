@@ -43,7 +43,8 @@ impl Governance {
         set_min_voting_period(&env, min_voting_period.unwrap_or(7 * 24 * 60 * 60));
         set_max_voting_period(&env, max_voting_period.unwrap_or(14 * 24 * 60 * 60));
         set_min_proposal_deposit(&env, min_proposal_deposit.unwrap_or(1000u128));
-        set_voting_mechanism(&env, voting_mechanism.unwrap_or(VotingMechanism::Linear));
+        let mechanism = voting_mechanism.unwrap_or(VotingMechanism::Linear);
+        set_voting_mechanism(&env, &mechanism);
         env.storage()
             .instance()
             .set(&DataKey::ProposalCounter, &0u64);
@@ -967,5 +968,289 @@ impl Governance {
         } else {
             false
         }
+    }
+
+    // ── Multi-Signature Governance Execution ─────────────────────────────────
+
+    /// Initialize multisig configuration for governance actions
+    pub fn init_multisig(
+        env: Env,
+        admin: Address,
+        threshold: u32,
+        authorized_signers: Vec<Address>,
+        approval_validity_secs: u64,
+    ) {
+        admin.require_auth();
+        require_admin(&env, &admin);
+
+        if threshold == 0 {
+            panic!("Threshold must be greater than 0");
+        }
+
+        if threshold > authorized_signers.len() {
+            panic!("Threshold cannot exceed number of signers");
+        }
+
+        if authorized_signers.len() < 2 {
+            panic!("Must have at least 2 authorized signers");
+        }
+
+        // Check for duplicate signers
+        for i in 0..authorized_signers.len() {
+            for j in (i + 1)..authorized_signers.len() {
+                if authorized_signers.get(i).unwrap() == authorized_signers.get(j).unwrap() {
+                    panic!("Duplicate signer not allowed");
+                }
+            }
+        }
+
+        let config = types::MultisigConfig {
+            threshold,
+            authorized_signers,
+            approval_validity_secs,
+            enabled: true,
+        };
+
+        storage::set_multisig_config(&env, &config);
+
+        env.events().publish(
+            (Symbol::new(&env, "MultisigInitialized"),),
+            (threshold, config.authorized_signers.len()),
+        );
+    }
+
+    /// Approve a proposal execution (multisig signers only)
+    pub fn approve_proposal_execution(env: Env, signer: Address, proposal_id: u64) {
+        signer.require_auth();
+
+        // Verify signer is authorized
+        if !storage::is_authorized_signer(&env, &signer) {
+            panic!("Not an authorized multisig signer");
+        }
+
+        // Verify proposal exists and is in Passed state
+        let proposal = get_proposal(&env, proposal_id).expect("Proposal not found");
+        if proposal.status != ProposalStatus::Passed {
+            panic!("Proposal must be in Passed state to approve execution");
+        }
+
+        // Get or create multisig approval
+        let config = storage::get_multisig_config(&env).expect("Multisig not configured");
+        let current_time = env.ledger().timestamp();
+
+        let mut approval = if let Some(existing) = storage::get_multisig_approval(&env, proposal_id) {
+            // Check if already expired
+            if current_time >= existing.expires_at {
+                panic!("Multisig approval has expired");
+            }
+
+            // Check if already executed
+            if existing.executed {
+                panic!("Proposal already executed");
+            }
+
+            // Check for duplicate approval
+            for i in 0..existing.approvers.len() {
+                if existing.approvers.get(i).unwrap() == signer {
+                    panic!("Already approved by this signer");
+                }
+            }
+
+            existing
+        } else {
+            // Create new approval record
+            types::MultisigApproval {
+                proposal_id,
+                approvers: Vec::new(&env),
+                required_approvals: config.threshold,
+                created_at: current_time,
+                expires_at: current_time + config.approval_validity_secs,
+                executed: false,
+            }
+        };
+
+        // Add approval
+        approval.approvers.push_back(signer.clone());
+        storage::set_multisig_approval(&env, proposal_id, &approval);
+
+        env.events().publish(
+            (Symbol::new(&env, "ProposalExecutionApproved"),),
+            (proposal_id, signer, approval.approvers.len(), approval.required_approvals),
+        );
+    }
+
+    /// Execute a proposal with multisig approval
+    /// Requires: proposal passed + sufficient multisig approvals
+    pub fn execute_proposal_with_multisig(env: Env, executor: Address, proposal_id: u64) {
+        executor.require_auth();
+
+        // Verify proposal exists and is in Passed state
+        let proposal = get_proposal(&env, proposal_id).expect("Proposal not found");
+        if proposal.status != ProposalStatus::Passed {
+            panic!("Proposal has not passed");
+        }
+
+        // Check multisig approval if enabled
+        if let Some(config) = storage::get_multisig_config(&env) {
+            if config.enabled {
+                let approval = storage::get_multisig_approval(&env, proposal_id)
+                    .expect("No multisig approval found for proposal");
+
+                // Check if expired
+                let current_time = env.ledger().timestamp();
+                if current_time >= approval.expires_at {
+                    panic!("Multisig approval has expired");
+                }
+
+                // Check if already executed
+                if approval.executed {
+                    panic!("Proposal already executed");
+                }
+
+                // Verify threshold met
+                if !storage::has_reached_threshold(&approval) {
+                    panic!(
+                        "Insufficient approvals: {} of {} required",
+                        approval.approvers.len(),
+                        approval.required_approvals
+                    );
+                }
+
+                // Mark as executed
+                let mut updated_approval = approval;
+                updated_approval.executed = true;
+                storage::set_multisig_approval(&env, proposal_id, &updated_approval);
+            }
+        }
+
+        // Execute the proposal (reuses existing execute_proposal logic)
+        Self::execute_proposal_internal(&env, executor.clone(), proposal_id);
+    }
+
+    /// Internal proposal execution logic
+    fn execute_proposal_internal(env: &Env, executor: Address, proposal_id: u64) {
+        let mut proposal = get_proposal(env, proposal_id).expect("Proposal not found");
+
+        // Check thresholds
+        let total_votes = proposal.votes_for + proposal.votes_against + proposal.votes_abstain;
+        let circulating_power = Self::get_circulating_voting_power(env.clone());
+
+        let quorum_threshold = get_quorum_threshold(env);
+        let approval_threshold = get_approval_threshold(env);
+
+        // Check quorum (30% of circulating voting power)
+        let quorum_required = (circulating_power * quorum_threshold as u128) / 10000u128;
+        if total_votes < quorum_required {
+            panic!("Quorum not met");
+        }
+
+        // Check approval (66% of votes cast must be For)
+        if total_votes > 0 {
+            let approval_required = (total_votes * approval_threshold as u128) / 10000u128;
+            if proposal.votes_for < approval_required {
+                panic!("Approval threshold not met");
+            }
+        }
+
+        // Persist the execution state before calling out to the target contract
+        proposal.status = ProposalStatus::Executed;
+        set_proposal(env, &proposal);
+
+        // Execute proposal based on type
+        match &proposal.proposal_type {
+            ProposalType::ParameterChange => {
+                if let (Some(target), Some(function)) =
+                    (&proposal.target_contract, &proposal.target_function)
+                {
+                    if !proposal.has_parameters {
+                        panic!("ParameterChange proposal missing parameters");
+                    }
+                    let params = &proposal.parameters;
+                    let mut args = Vec::new(env);
+                    args.push_back(params.name.clone().into());
+                    args.push_back(params.value.clone().into());
+
+                    if let Some(target_args) = &proposal.target_args {
+                        for i in 0..target_args.len() {
+                            args.push_back(target_args.get(i).unwrap());
+                        }
+                    }
+
+                    let _result: Val = env.invoke_contract(&target, function, args);
+                } else {
+                    panic!("ParameterChange proposal missing target contract, function, or parameters");
+                }
+            }
+            ProposalType::ContractUpgrade => {
+                if let (Some(target), Some(function)) =
+                    (&proposal.target_contract, &proposal.target_function)
+                {
+                    let mut args = Vec::new(env);
+
+                    if let Some(target_args) = &proposal.target_args {
+                        for i in 0..target_args.len() {
+                            args.push_back(target_args.get(i).unwrap());
+                        }
+                    } else if proposal.has_parameters {
+                        panic!("ContractUpgrade requires target_args with new contract address");
+                    }
+
+                    let _result: Val = env.invoke_contract(&target, function, args);
+                } else {
+                    panic!("ContractUpgrade proposal missing target contract or function");
+                }
+            }
+            ProposalType::EmergencyPause => {
+                if let (Some(target), Some(function)) =
+                    (&proposal.target_contract, &proposal.target_function)
+                {
+                    let mut args = Vec::new(env);
+
+                    if let Some(target_args) = &proposal.target_args {
+                        for i in 0..target_args.len() {
+                            args.push_back(target_args.get(i).unwrap());
+                        }
+                    } else if proposal.has_parameters {
+                        let params = &proposal.parameters;
+                        let pause_bool = params.value == String::from_str(env, "true")
+                            || params.value == String::from_str(env, "1");
+                        args.push_back(pause_bool.into());
+                    } else {
+                        panic!("EmergencyPause proposal missing pause state");
+                    }
+
+                    let _result: Val = env.invoke_contract(&target, function, args);
+                } else {
+                    panic!("EmergencyPause proposal missing target contract or function");
+                }
+            }
+        }
+
+        // Return proposal deposit to proposer
+        let min_deposit = get_min_proposal_deposit(env);
+        let governance_token = get_governance_token(env);
+        let token_client = token::Client::new(env, &governance_token);
+        let contract_address = env.current_contract_address();
+        token_client.transfer(
+            &contract_address,
+            &proposal.proposer,
+            &(min_deposit as i128),
+        );
+
+        // Emit event
+        env.events().publish(
+            (Symbol::new(&env, "ProposalExecuted"),),
+            (proposal_id, executor, proposal.proposal_type),
+        );
+    }
+
+    /// Get multisig approval status for a proposal
+    pub fn get_multisig_approval_status(env: Env, proposal_id: u64) -> Option<types::MultisigApproval> {
+        storage::get_multisig_approval(&env, proposal_id)
+    }
+
+    /// Get multisig configuration
+    pub fn get_multisig_config(env: Env) -> Option<types::MultisigConfig> {
+        storage::get_multisig_config(&env)
     }
 }
