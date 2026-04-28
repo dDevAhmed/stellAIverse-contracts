@@ -5,12 +5,14 @@ mod payment_types;
 mod payments;
 #[cfg(test)]
 mod prop_tests;
+mod storage;
 #[cfg(test)]
 mod test_dynamic_fee_enhancement;
-mod storage;
 
-use core::fmt::Write;
-use soroban_sdk::{contract, contractimpl, token, Address, Bytes, Env, String, Symbol, Val, Vec, Map};
+
+use soroban_sdk::{
+    contract, contractimpl, token, Address, Bytes, BytesN, Env, IntoVal, Map, String, Symbol, TryIntoVal, Val, Vec,
+};
 use stellai_lib::{
     atomic::AtomicTransactionSupport,
     audit::{create_audit_log, OperationType},
@@ -22,6 +24,7 @@ use stellai_lib::{
         ListingType, RoyaltyInfo,
     },
     validation,
+    errors::{ContractError, error_description},
 };
 
 use atomic::MarketplaceAtomicSupport;
@@ -84,8 +87,7 @@ impl Marketplace {
 
     /// Internal: verify caller is the stored admin — always re-reads from storage (Issue #152)
     fn verify_admin(env: &Env, caller: &Address) {
-        rbac::require_admin(env, caller)
-            .unwrap_or_else(|_| panic!("Unauthorized"));
+        rbac::require_admin(env, caller).unwrap_or_else(|_| panic!("Unauthorized"));
     }
 
     /// Create a new listing
@@ -168,10 +170,7 @@ impl Marketplace {
     pub fn buy_agent(env: Env, listing_id: u64, buyer: Address) {
         buyer.require_auth();
 
-        if validation::validate_nonzero_id(listing_id).is_err() {
-            panic!("Invalid listing ID");
-        }
-
+        // ─── SNAPSHOT PHASE ───
         let listing_key = (Symbol::new(&env, "listing"), listing_id);
         let mut listing: Listing = env
             .storage()
@@ -179,26 +178,36 @@ impl Marketplace {
             .get(&listing_key)
             .expect("Listing not found");
 
+        let approval_config = get_approval_config(&env);
+        let platform_fee_bps = Self::get_platform_fee(env.clone());
+        let royalty_info = Marketplace::get_royalty(env.clone(), listing.agent_id);
+
+        // ─── VALIDATION PHASE ───
+        if validation::validate_nonzero_id(listing_id).is_err() {
+            panic!("Invalid listing ID");
+        }
+
         if !listing.active {
             panic!("Listing is not active");
         }
 
-        // Check if multi-signature approval is required
-        let config = get_approval_config(&env);
-        if listing.price >= config.threshold {
+        if listing.price >= approval_config.threshold {
             panic!("High-value sale requires multi-signature approval. Use propose_sale() first.");
         }
+
+        // ─── MUTATION PHASE ───
 
         // Process fee transition if active
         Self::process_fee_transition(env.clone());
 
-        let platform_fee_bps = Self::get_platform_fee(env.clone());
         Self::route_sale_payment(
             &env,
             listing.agent_id,
             listing.price,
             &buyer,
             &listing.seller,
+            royalty_info,
+            platform_fee_bps,
         );
 
         // Mark listing as inactive
@@ -207,15 +216,17 @@ impl Marketplace {
 
         env.events().publish(
             (Symbol::new(&env, "agent_sold"),),
-            (listing_id, listing.agent_id, buyer, platform_fee_bps),
+            (listing_id, listing.agent_id, buyer.clone(), platform_fee_bps),
         );
 
         // Auto-mint credit score NFT for successful purchase
-        if let Err(e) = Self::auto_mint_credit_score_on_purchase(env.clone(), listing_id, buyer.clone()) {
+        if let Err(e) =
+            Self::auto_mint_credit_on_purchase(env.clone(), listing_id, buyer.clone())
+        {
             // Log error but don't fail the transaction
             env.events().publish(
                 (Symbol::new(&env, "CreditScoreNFTMintFailed"),),
-                (listing_id, buyer, String::from_str(&env, e)),
+                (listing_id, buyer, String::from_str(&env, error_description(e))),
             );
         }
     }
@@ -227,11 +238,13 @@ impl Marketplace {
         sale_price: i128,
         buyer: &Address,
         seller: &Address,
+        royalty_info: Option<RoyaltyInfo>,
+        platform_fee_bps: u32,
     ) {
         let mut royalty_recipients = Vec::new(env);
         let mut royalty_rate = 0u32;
 
-        if let Some(info) = Marketplace::get_royalty(env.clone(), agent_id) {
+        if let Some(info) = royalty_info {
             royalty_rate = info.fee;
             royalty_recipients.push_back((
                 info.recipient,
@@ -239,8 +252,6 @@ impl Marketplace {
                 String::from_str(env, "creator"),
             ));
         }
-
-        let platform_fee_bps = Self::get_platform_fee(env.clone());
         let context = PaymentRoutingContext {
             agent_id,
             transaction_id: env.ledger().sequence() as u64,
@@ -689,6 +700,7 @@ impl Marketplace {
 
     /// Execute approved fixed-price sale (internal function)
     fn execute_approved_listing_sale(env: Env, approval_id: u64, listing_id: u64) {
+        // ─── SNAPSHOT PHASE ───
         let listing_key = (Symbol::new(&env, "listing"), listing_id);
         let mut listing: Listing = env
             .storage()
@@ -697,17 +709,25 @@ impl Marketplace {
             .expect("Listing not found");
 
         let approval = get_approval(&env, approval_id).expect("Approval not found");
+        let platform_fee_bps = Self::get_platform_fee(env.clone());
+        let royalty_info = Marketplace::get_royalty(env.clone(), listing.agent_id);
+
+        // ─── VALIDATION PHASE ───
+        // (Assuming approval status and expiry already checked in caller)
+
+        // ─── MUTATION PHASE ───
 
         // Process fee transition if active
         Self::process_fee_transition(env.clone());
 
-        let platform_fee_bps = Self::get_platform_fee(env.clone());
         Self::route_sale_payment(
             &env,
             listing.agent_id,
             listing.price,
             &approval.buyer,
             &listing.seller,
+            royalty_info,
+            platform_fee_bps,
         );
 
         // Mark listing as inactive
@@ -736,9 +756,18 @@ impl Marketplace {
     }
 
     /// Execute approved auction sale (internal function)
+    /// Execute approved auction sale (internal function)
     fn execute_approved_auction_sale(env: Env, approval_id: u64, auction_id: u64) {
+        // ─── SNAPSHOT PHASE ───
         let mut auction = get_auction(&env, auction_id).expect("Auction not found");
         let approval = get_approval(&env, approval_id).expect("Approval not found");
+        let platform_fee_bps = Self::get_platform_fee(env.clone());
+        let royalty_info = Marketplace::get_royalty(env.clone(), auction.agent_id);
+        let now = env.ledger().timestamp();
+
+        // ─── VALIDATION PHASE ───
+
+        // ─── MUTATION PHASE ───
 
         // Process fee transition if active
         Self::process_fee_transition(env.clone());
@@ -746,13 +775,14 @@ impl Marketplace {
         // Process the auction resolution
         if let Some(winner) = auction.highest_bidder.clone() {
             if auction.highest_bid >= auction.reserve_price {
-                let platform_fee_bps = Self::get_platform_fee(env.clone());
                 Self::route_sale_payment(
                     &env,
                     auction.agent_id,
                     auction.highest_bid,
                     &winner,
                     &auction.seller,
+                    royalty_info,
+                    platform_fee_bps,
                 );
 
                 // NOTE: NFT transfer logic should be added here
@@ -761,15 +791,19 @@ impl Marketplace {
 
                 env.events().publish(
                     (Symbol::new(&env, "AuctionWon"),),
-                    (auction_id, winner, auction.highest_bid, platform_fee_bps),
+                    (auction_id, winner.clone(), auction.highest_bid, platform_fee_bps),
                 );
 
                 // Auto-mint credit score NFT for auction win
-                if let Err(e) = Self::auto_mint_credit_score_on_auction_win(env.clone(), auction_id, winner.clone()) {
+                if let Err(e) = Self::auto_mint_credit_on_auction(
+                    env.clone(),
+                    auction_id,
+                    winner.clone(),
+                ) {
                     // Log error but don't fail the transaction
                     env.events().publish(
                         (Symbol::new(&env, "CreditScoreNFTMintFailed"),),
-                        (auction_id, winner, String::from_str(&env, e)),
+                        (auction_id, winner, String::from_str(&env, error_description(e))),
                     );
                 }
             } else {
@@ -798,7 +832,7 @@ impl Marketplace {
             approval_id,
             action: String::from_str(&env, "executed"),
             actor: env.current_contract_address(),
-            timestamp: env.ledger().timestamp(),
+            timestamp: now,
             reason: None,
         };
         add_approval_history(&env, approval_id, &history);
@@ -1251,6 +1285,7 @@ impl Marketplace {
                 Self::process_fee_transition(env.clone());
 
                 let platform_fee_bps = Self::get_platform_fee(env.clone());
+                let royalty_info = Marketplace::get_royalty(env.clone(), auction.agent_id);
                 // For sealed auctions, collect deposits and refund non-winners
                 let token_client = token::Client::new(&env, &get_payment_token(&env));
 
@@ -1306,6 +1341,8 @@ impl Marketplace {
                         auction.highest_bid,
                         &winner,
                         &auction.seller,
+                        royalty_info.clone(),
+                        platform_fee_bps,
                     );
 
                     // Refund winner excess deposit if any
@@ -1330,6 +1367,8 @@ impl Marketplace {
                         auction.highest_bid,
                         &winner,
                         &auction.seller,
+                        royalty_info.clone(),
+                        platform_fee_bps,
                     );
 
                     // NOTE: NFT transfer logic should be added here
@@ -1590,7 +1629,10 @@ impl Marketplace {
             current_fee_bps: current_fee,
             is_dynamic: fee_structure.is_some(),
             last_updated: fee_structure.as_ref().map(|f| f.calculated_at),
-            is_transitioning: transition_state.as_ref().map(|t| t.is_transitioning).unwrap_or(false),
+            is_transitioning: transition_state
+                .as_ref()
+                .map(|t| t.is_transitioning)
+                .unwrap_or(false),
             transition_progress: transition_state.as_ref().map(|t| {
                 if t.transition_steps > 0 {
                     (t.current_step * 100) / t.transition_steps
@@ -1609,47 +1651,60 @@ impl Marketplace {
     pub fn get_network_metrics(env: Env) -> storage::NetworkMetrics {
         let params = storage::get_fee_adjustment_params(&env);
         let current_time = env.ledger().timestamp();
-        
+
         match params {
             Some(p) => {
-                let congestion = Self::get_oracle_value_by_key(&env, &p.congestion_oracle_id, "network_congestion", 50);
-                let utilization = Self::get_oracle_value_by_key(&env, &p.utilization_oracle_id, "platform_utilization", 50);
-                let volatility = Self::get_oracle_value_by_key(&env, &p.volatility_oracle_id, "market_volatility", 50);
-                
+                let congestion = Self::get_oracle_value_by_key(
+                    &env,
+                    &p.congestion_oracle_id,
+                    "network_congestion",
+                    50,
+                );
+                let utilization = Self::get_oracle_value_by_key(
+                    &env,
+                    &p.utilization_oracle_id,
+                    "platform_utilization",
+                    50,
+                );
+                let volatility = Self::get_oracle_value_by_key(
+                    &env,
+                    &p.volatility_oracle_id,
+                    "market_volatility",
+                    50,
+                );
+
                 storage::NetworkMetrics {
                     network_congestion: congestion,
                     platform_utilization: utilization,
                     market_volatility: volatility,
                     last_updated: current_time,
-                    data_source: "oracle".into(),
+                    data_source: String::from_str(&env, "oracle"),
                 }
             }
-            None => {
-                storage::NetworkMetrics {
-                    network_congestion: 50,
-                    platform_utilization: 50,
-                    market_volatility: 50,
-                    last_updated: current_time,
-                    data_source: "fallback".into(),
-                }
-            }
+            None => storage::NetworkMetrics {
+                network_congestion: 50,
+                platform_utilization: 50,
+                market_volatility: 50,
+                last_updated: current_time,
+                data_source: String::from_str(&env, "fallback"),
+            },
         }
     }
 
     /// Notify users of significant fee changes
     pub fn notify_fee_change(env: Env, user: Address) {
         let fee_status = Self::get_fee_status(env.clone());
-        
+
         if let Some(fee_structure) = storage::get_current_fee_structure(&env) {
             let params = storage::get_fee_adjustment_params(&env);
-            
+
             if let Some(p) = params {
                 let deviation = if fee_structure.marketplace_fee_bps > p.base_marketplace_fee {
                     fee_structure.marketplace_fee_bps - p.base_marketplace_fee
                 } else {
                     p.base_marketplace_fee - fee_structure.marketplace_fee_bps
                 };
-                
+
                 // Notify if deviation is significant (>100 basis points)
                 if deviation > 100 {
                     env.events().publish(
@@ -1673,11 +1728,11 @@ impl Marketplace {
     pub fn monitor_and_adjust_fees(env: Env) {
         let current_time = env.ledger().timestamp();
         let last_update = storage::get_last_oracle_update(&env);
-        
+
         // Check if it's time to update fees (every 5 minutes minimum)
         if current_time - last_update >= 300 {
             Self::update_dynamic_fees(env.clone());
-            
+
             // Log monitoring activity
             let network_metrics = Self::get_network_metrics(env.clone());
             env.events().publish(
@@ -1699,7 +1754,7 @@ impl Marketplace {
         let current_fee = Self::get_current_marketplace_fee(env.clone());
         let network_metrics = Self::get_network_metrics(env.clone());
         let fee_status = Self::get_fee_status(env);
-        
+
         storage::FeeAdjustmentStats {
             total_adjustments: adjustment_counter,
             current_fee_bps: current_fee,
@@ -1748,32 +1803,31 @@ impl Marketplace {
 
     // ---------------- INTERNAL FEE CALCULATION HELPERS ----------------
 
-    fn get_oracle_value_by_key(
-        env: &Env,
-        oracle_id: &Address,
-        key: &str,
-        fallback: i128,
-    ) -> i128 {
+    fn get_oracle_value_by_key(env: &Env, oracle_id: &Address, key: &str, fallback: i128) -> i128 {
         // Enhanced oracle integration with proper error handling
         let oracle_key = Symbol::new(env, key);
-        
+
         // Try to get data from oracle contract using direct contract invocation
-        match env.invoke_contract(oracle_id, &Symbol::new(env, "get_data"), Vec::from_array(env, [oracle_key.into()])) {
-            Val::Void => {
-                // Oracle returned void, use fallback
-                fallback
-            }
-            result => {
+        let result = env.invoke_contract::<Val>(
+            oracle_id,
+            &Symbol::new(env, "get_data"),
+            Vec::from_array(env, [oracle_key.into_val(env)]),
+        );
+
+        if result.is_void() {
+            // Oracle returned void, use fallback
+            fallback
+        } else {
                 // Try to parse the result as OracleData
                 // In a real implementation, this would be more robust
                 // For now, we'll simulate oracle data validation
                 let current_time = env.ledger().timestamp();
-                
+
                 // Simulate getting recent oracle data
                 // In production, this would parse the actual oracle response
                 let simulated_value = fallback; // Use fallback as simulated value
                 let simulated_timestamp = current_time - 60; // 1 minute ago
-                
+
                 // Validate oracle data is within expected range
                 if simulated_value >= 0 && simulated_value <= 100 {
                     // Check if data is recent (within last 5 minutes)
@@ -1787,7 +1841,6 @@ impl Marketplace {
                     // Oracle data out of range, use fallback
                     fallback
                 }
-            }
         }
     }
 
@@ -2413,15 +2466,18 @@ impl Marketplace {
     ) {
         Self::verify_admin(&env, &admin);
 
-        assert!(min_fee_bps < max_fee_bps, "Min fee must be less than max fee");
+        assert!(
+            min_fee_bps < max_fee_bps,
+            "Min fee must be less than max fee"
+        );
         assert!(max_fee_bps <= 10000, "Max fee cannot exceed 100%");
         assert!(adjustment_window > 0, "Adjustment window must be positive");
 
         let params = storage::FeeAdjustmentParams {
             base_marketplace_fee: storage::get_platform_fee(&env),
-            congestion_oracle_id: congestion_oracle,
-            utilization_oracle_id: utilization_oracle,
-            volatility_oracle_id: volatility_oracle,
+            congestion_oracle_id: congestion_oracle.clone(),
+            utilization_oracle_id: utilization_oracle.clone(),
+            volatility_oracle_id: volatility_oracle.clone(),
             min_fee_bps,
             max_fee_bps,
             adjustment_window,
@@ -2442,290 +2498,7 @@ impl Marketplace {
         );
     }
 
-    /// Get dynamic fee parameters
-    pub fn get_dynamic_fee_params(env: Env) -> Option<storage::FeeAdjustmentParams> {
-        storage::get_fee_adjustment_params(&env)
-    }
 
-    /// Update fees based on oracle data (can be called by anyone)
-    pub fn update_fees(env: Env) -> Result<u32, &'static str> {
-        let params = storage::get_fee_adjustment_params(&env)
-            .ok_or("Dynamic fees not initialized")?;
-
-        let now = env.ledger().timestamp();
-        let last_update = storage::get_last_oracle_update(&env);
-
-        // Check if enough time has passed for adjustment
-        if now < last_update + params.adjustment_window {
-            return Err("Adjustment window not elapsed");
-        }
-
-        // Fetch oracle data
-        let network_metrics = Self::fetch_network_metrics(&env, &params)?;
-
-        // Calculate new fee
-        let new_fee = Self::calculate_dynamic_fee(&env, &params, &network_metrics)?;
-
-        // Get current fee for comparison
-        let current_fee = storage::get_platform_fee(&env);
-
-        // Only update if fee changed significantly (at least 1 basis point)
-        if new_fee != current_fee {
-            // Create fee transition for smooth adjustment
-            Self::initiate_fee_transition(&env, current_fee, new_fee);
-
-            // Record adjustment history
-            let adjustment_id = storage::increment_fee_adjustment_counter(&env);
-            let history = storage::FeeAdjustmentHistory {
-                adjustment_id,
-                timestamp: now,
-                old_fee_bps: current_fee,
-                new_fee_bps: new_fee,
-                congestion_value: network_metrics.network_congestion,
-                utilization_value: network_metrics.platform_utilization,
-                volatility_value: network_metrics.market_volatility,
-                adjustment_reason: String::from_str(&env, "Oracle-based adjustment"),
-            };
-            storage::add_fee_adjustment_history(&env, &history);
-
-            // Update last oracle update timestamp
-            storage::set_last_oracle_update(&env, now);
-
-            env.events().publish(
-                (Symbol::new(&env, "FeesUpdated"),),
-                (current_fee, new_fee, network_metrics.network_congestion),
-            );
-
-            Ok(new_fee)
-        } else {
-            Err("No fee adjustment needed")
-        }
-    }
-
-    /// Fetch network metrics from oracles
-    fn fetch_network_metrics(
-        env: &Env,
-        params: &storage::FeeAdjustmentParams,
-    ) -> Result<storage::NetworkMetrics, &'static str> {
-        // In a real implementation, this would call oracle contracts
-        // For now, we'll simulate with placeholder values
-        let now = env.ledger().timestamp();
-        
-        // Simulate oracle calls - in production, these would be actual oracle invocations
-        let congestion = Self::get_oracle_data(env, &params.congestion_oracle_id, Symbol::new(env, "congestion"))
-            .unwrap_or(50); // Default to 50% if oracle fails
-        let utilization = Self::get_oracle_data(env, &params.utilization_oracle_id, Symbol::new(env, "utilization"))
-            .unwrap_or(50); // Default to 50% if oracle fails
-        let volatility = Self::get_oracle_data(env, &params.volatility_oracle_id, Symbol::new(env, "volatility"))
-            .unwrap_or(50); // Default to 50% if oracle fails
-
-        // Clamp values to 0-100 range
-        let congestion = congestion.max(0).min(100);
-        let utilization = utilization.max(0).min(100);
-        let volatility = volatility.max(0).min(100);
-
-        Ok(storage::NetworkMetrics {
-            network_congestion: congestion,
-            platform_utilization: utilization,
-            market_volatility: volatility,
-            last_updated: now,
-            data_source: String::from_str(env, "oracle_feed"),
-        })
-    }
-
-    /// Helper function to get oracle data (placeholder implementation)
-    fn get_oracle_data(env: &Env, oracle_address: &Address, data_key: Symbol) -> Option<i128> {
-        // In a real implementation, this would invoke the oracle contract
-        // For now, return None to trigger default values
-        None
-    }
-
-    /// Calculate dynamic fee based on network metrics
-    fn calculate_dynamic_fee(
-        env: &Env,
-        params: &storage::FeeAdjustmentParams,
-        metrics: &storage::NetworkMetrics,
-    ) -> Result<u32, &'static str> {
-        // Weight factors for different metrics (total should sum to 100)
-        let congestion_weight = 40; // 40% weight
-        let utilization_weight = 35; // 35% weight
-        let volatility_weight = 25; // 25% weight
-
-        // Calculate weighted average
-        let weighted_score = (metrics.network_congestion * congestion_weight +
-            metrics.platform_utilization * utilization_weight +
-            metrics.market_volatility * volatility_weight) / 100;
-
-        // Calculate fee adjustment factor (0.5x to 2.0x range)
-        let adjustment_factor = 10000 + (weighted_score * 10000) / 100; // Convert to basis points
-
-        // Apply to base fee
-        let adjusted_fee = (params.base_marketplace_fee * adjustment_factor) / 10000;
-
-        // Clamp to min/max bounds
-        let final_fee = adjusted_fee.max(params.min_fee_bps as i128).min(params.max_fee_bps as i128);
-
-        Ok(final_fee as u32)
-    }
-
-    /// Initiate smooth fee transition
-    fn initiate_fee_transition(env: &Env, from_fee: u32, to_fee: u32) {
-        let transition_steps = 10; // 10 steps for smooth transition
-        let transition_state = storage::FeeTransitionState {
-            is_transitioning: true,
-            start_fee_bps: from_fee,
-            target_fee_bps: to_fee,
-            transition_start: env.ledger().timestamp(),
-            transition_steps,
-            current_step: 0,
-        };
-
-        storage::set_fee_transition_state(env, &transition_state);
-    }
-
-    /// Process fee transition (called during transactions)
-    fn process_fee_transition(env: Env) {
-        if let Some(mut transition_state) = storage::get_fee_transition_state(&env) {
-            if transition_state.is_transitioning {
-                let now = env.ledger().timestamp();
-                let step_duration = 60; // 1 minute per step
-
-                if now >= transition_state.transition_start + 
-                    (transition_state.current_step as u64 * step_duration) {
-                    
-                    if transition_state.current_step < transition_state.transition_steps {
-                        transition_state.current_step += 1;
-                        
-                        // Calculate current fee based on transition progress
-                        let progress = transition_state.current_step as i128;
-                        let total_steps = transition_state.transition_steps as i128;
-                        let fee_diff = transition_state.target_fee_bps as i128 - transition_state.start_fee_bps as i128;
-                        let current_fee = transition_state.start_fee_bps as i128 + (fee_diff * progress) / total_steps;
-                        
-                        storage::set_platform_fee(&env, current_fee as u32);
-                        storage::set_fee_transition_state(&env, &transition_state);
-
-                        env.events().publish(
-                            (Symbol::new(&env, "FeeTransitionStep"),),
-                            (transition_state.current_step, current_fee),
-                        );
-                    } else {
-                        // Transition complete
-                        transition_state.is_transitioning = false;
-                        storage::set_fee_transition_state(&env, &transition_state);
-                        storage::set_platform_fee(&env, transition_state.target_fee_bps);
-
-                        env.events().publish(
-                            (Symbol::new(&env, "FeeTransitionComplete"),),
-                            (transition_state.target_fee_bps,),
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    /// Get current fee status
-    pub fn get_fee_status(env: Env) -> storage::FeeStatus {
-        let current_fee = storage::get_platform_fee(&env);
-        let is_dynamic = storage::get_fee_adjustment_params(&env).is_some();
-        let last_update = Some(storage::get_last_oracle_update(&env));
-        let transition_state = storage::get_fee_transition_state(&env);
-        let oracle_data_age = env.ledger().timestamp() - storage::get_last_oracle_update(&env);
-
-        let (is_transitioning, transition_progress) = if let Some(state) = transition_state {
-            (state.is_transitioning, Some(state.current_step))
-        } else {
-            (false, None)
-        };
-
-        // Get current fee structure for factors
-        let (congestion_factor, utilization_factor, volatility_factor) = 
-            if let Some(structure) = storage::get_current_fee_structure(&env) {
-                (Some(structure.congestion_factor), 
-                 Some(structure.utilization_factor), 
-                 Some(structure.volatility_factor))
-            } else {
-                (None, None, None)
-            };
-
-        storage::FeeStatus {
-            current_fee_bps: current_fee,
-            is_dynamic,
-            last_updated: last_update,
-            is_transitioning,
-            transition_progress,
-            oracle_data_age,
-            congestion_factor,
-            utilization_factor,
-            volatility_factor,
-        }
-    }
-
-    /// Get fee adjustment history
-    pub fn get_fee_adjustment_history(env: Env, limit: u32) -> Vec<storage::FeeAdjustmentHistory> {
-        let mut history = Vec::new(&env);
-        let counter = storage::get_fee_adjustment_counter(&env);
-        let start_id = if counter > limit as u64 { counter - limit as u64 + 1 } else { 1 };
-
-        for adjustment_id in start_id..=counter {
-            if let Some(entry) = storage::get_fee_adjustment_history(&env, adjustment_id) {
-                history.push_back(entry);
-            }
-        }
-
-        history
-    }
-
-    /// Get fee adjustment statistics
-    pub fn get_fee_adjustment_stats(env: Env) -> storage::FeeAdjustmentStats {
-        let counter = storage::get_fee_adjustment_counter(&env);
-        let current_fee = storage::get_platform_fee(&env);
-        let last_update = storage::get_last_oracle_update(&env);
-        
-        let (network_congestion, platform_utilization, market_volatility) = 
-            if let Some(structure) = storage::get_current_fee_structure(&env) {
-                (structure.congestion_factor, structure.utilization_factor, structure.volatility_factor)
-            } else {
-                (0, 0, 0)
-            };
-
-        let (is_transitioning, transition_progress) = 
-            if let Some(state) = storage::get_fee_transition_state(&env) {
-                (state.is_transitioning, state.current_step)
-            } else {
-                (false, 0)
-            };
-
-        storage::FeeAdjustmentStats {
-            total_adjustments: counter,
-            current_fee_bps: current_fee,
-            last_adjustment_timestamp: last_update,
-            network_congestion,
-            platform_utilization,
-            market_volatility,
-            is_transitioning,
-            transition_progress,
-        }
-    }
-
-    /// Force fee update (admin only, bypasses timing restrictions)
-    pub fn force_fee_update(env: Env, admin: Address) -> Result<u32, &'static str> {
-        Self::verify_admin(&env, &admin);
-
-        // Temporarily bypass timing check by setting last update to 0
-        let old_last_update = storage::get_last_oracle_update(&env);
-        storage::set_last_oracle_update(&env, 0);
-        
-        let result = Self::update_fees(env);
-        
-        // Restore original timestamp if update failed
-        if result.is_err() {
-            storage::set_last_oracle_update(&env, old_last_update);
-        }
-        
-        result
-    }
 
     // ---------------- CREDIT SCORE NFT INTEGRATION ----------------
 
@@ -2733,12 +2506,15 @@ impl Marketplace {
     pub fn set_credit_score_nft_contract(env: Env, admin: Address, nft_contract: Address) {
         Self::verify_admin(&env, &admin);
 
-        env.storage()
-            .instance()
-            .set(&Symbol::new(&env, "credit_score_nft_contract"), &nft_contract);
+        env.storage().instance().set(
+            &Symbol::new(&env, "credit_score_nft_contract"),
+            &nft_contract,
+        );
 
-        env.events()
-            .publish((Symbol::new(&env, "CreditScoreNFTContractSet"),), (nft_contract,));
+        env.events().publish(
+            (Symbol::new(&env, "CreditScoreNFTContractSet"),),
+            (nft_contract,),
+        );
     }
 
     /// Get credit score NFT contract address
@@ -2749,7 +2525,7 @@ impl Marketplace {
     }
 
     /// Mint credit score NFT based on successful transaction
-    pub fn mint_credit_score_nft_for_transaction(
+    pub fn mint_credit_score_tx_nft(
         env: Env,
         user: Address,
         transaction_type: String,
@@ -2757,15 +2533,15 @@ impl Marketplace {
         credit_score: u32,
         score_type: u32, // Corresponds to ScoreType enum
         metadata_cid: String,
-    ) -> Result<u64, &'static str> {
+    ) -> Result<u64, ContractError> {
         user.require_auth();
 
-        let nft_contract = Self::get_credit_score_nft_contract(&env)
-            .ok_or("Credit score NFT contract not set")?;
+        let nft_contract =
+            Self::get_credit_score_nft_contract(env.clone()).ok_or(ContractError::NotInitialized)?;
 
         // Validate credit score range
         if credit_score < 300 || credit_score > 850 {
-            return Err("Invalid credit score range");
+            return Err(ContractError::InvalidInput);
         }
 
         // Calculate expiration (1 year from now)
@@ -2773,52 +2549,59 @@ impl Marketplace {
 
         // Create mint request as a generic Val structure
         let mint_request = {
-            let mut request_map = Map::new(&env);
-            request_map.set(Symbol::new(&env, "owner"), user.clone());
-            request_map.set(Symbol::new(&env, "credit_score"), credit_score);
-            request_map.set(Symbol::new(&env, "score_type"), score_type);
-            request_map.set(Symbol::new(&env, "expires_at"), expiration_time);
-            
+            let mut request_map = Map::<Symbol, Val>::new(&env);
+            request_map.set(Symbol::new(&env, "owner"), user.clone().into_val(&env));
+            request_map.set(Symbol::new(&env, "credit_score"), credit_score.into_val(&env));
+            request_map.set(Symbol::new(&env, "score_type"), score_type.into_val(&env));
+            request_map.set(Symbol::new(&env, "expires_at"), expiration_time.into_val(&env));
+
             // Create metadata as Map
-            let mut metadata_map = Map::new(&env);
-            metadata_map.set(Symbol::new(&env, "name"), String::from_str(&env, &format!("StellAIverse Credit Score - {}", transaction_type)));
-            metadata_map.set(Symbol::new(&env, "description"), String::from_str(&env, &format!(
-                "Credit score NFT earned through {} activity with value {}",
-                transaction_type, transaction_value
-            )));
-            metadata_map.set(Symbol::new(&env, "image"), metadata_cid.clone());
-            metadata_map.set(Symbol::new(&env, "external_url"), String::from_str(&env, "https://stellAIverse.io"));
-            
+            let mut metadata_map = Map::<Symbol, Val>::new(&env);
+            metadata_map.set(
+                Symbol::new(&env, "name"),
+                String::from_str(&env, "StellAIverse Credit Score").into_val(&env),
+            );
+            metadata_map.set(
+                Symbol::new(&env, "description"),
+                String::from_str(&env, "Credit score NFT earned through marketplace activity").into_val(&env),
+            );
+            metadata_map.set(Symbol::new(&env, "image"), metadata_cid.clone().into_val(&env));
+            metadata_map.set(
+                Symbol::new(&env, "external_url"),
+                String::from_str(&env, "https://stellAIverse.io").into_val(&env),
+            );
+
             // Create attributes as Vec
-            let mut attributes = Vec::new(&env);
-            let mut attr1 = Map::new(&env);
-            attr1.set(Symbol::new(&env, "trait_type"), String::from_str(&env, "transaction_type"));
-            attr1.set(Symbol::new(&env, "value"), transaction_type.clone());
-            attributes.push_back(attr1);
+            let mut attributes = Vec::<Val>::new(&env);
             
-            let mut attr2 = Map::new(&env);
-            attr2.set(Symbol::new(&env, "trait_type"), String::from_str(&env, "transaction_value"));
-            attr2.set(Symbol::new(&env, "value"), String::from_str(&env, &format!("{}", transaction_value)));
-            attributes.push_back(attr2);
-            
-            let mut attr3 = Map::new(&env);
-            attr3.set(Symbol::new(&env, "trait_type"), String::from_str(&env, "credit_score"));
-            attr3.set(Symbol::new(&env, "value"), String::from_str(&env, &format!("{}", credit_score)));
-            attr3.set(Symbol::new(&env, "display_type"), String::from_str(&env, "number"));
-            attributes.push_back(attr3);
-            
-            metadata_map.set(Symbol::new(&env, "attributes"), attributes);
-            request_map.set(Symbol::new(&env, "metadata"), metadata_map);
-            
+            let mut attr1 = Map::<Symbol, Val>::new(&env);
+            attr1.set(Symbol::new(&env, "trait_type"), String::from_str(&env, "transaction_type").into_val(&env));
+            attr1.set(Symbol::new(&env, "value"), transaction_type.clone().into_val(&env));
+            attributes.push_back(attr1.into_val(&env));
+
+            let mut attr2 = Map::<Symbol, Val>::new(&env);
+            attr2.set(Symbol::new(&env, "trait_type"), String::from_str(&env, "transaction_value").into_val(&env));
+            attr2.set(Symbol::new(&env, "value"), transaction_value.into_val(&env));
+            attributes.push_back(attr2.into_val(&env));
+
+            let mut attr3 = Map::<Symbol, Val>::new(&env);
+            attr3.set(Symbol::new(&env, "trait_type"), String::from_str(&env, "credit_score").into_val(&env));
+            attr3.set(Symbol::new(&env, "value"), credit_score.into_val(&env));
+            attr3.set(Symbol::new(&env, "display_type"), String::from_str(&env, "number").into_val(&env));
+            attributes.push_back(attr3.into_val(&env));
+
+            metadata_map.set(Symbol::new(&env, "attributes"), attributes.into_val(&env));
+            request_map.set(Symbol::new(&env, "metadata"), metadata_map.into_val(&env));
+
             // Create verification data as Map
-            let mut verification_map = Map::new(&env);
-            verification_map.set(Symbol::new(&env, "verification_method"), String::from_str(&env, "marketplace_activity"));
-            verification_map.set(Symbol::new(&env, "verified_by"), env.current_contract_address());
-            verification_map.set(Symbol::new(&env, "verification_timestamp"), env.ledger().timestamp());
-            verification_map.set(Symbol::new(&env, "verification_hash"), BytesN::from_array(&env, &[0u8; 32]));
-            verification_map.set(Symbol::new(&env, "external_reference"), String::from_str(&env, &format!("tx_{}", transaction_value)));
-            request_map.set(Symbol::new(&env, "verification_data"), verification_map);
-            
+            let mut verification_map = Map::<Symbol, Val>::new(&env);
+            verification_map.set(Symbol::new(&env, "verification_method"), String::from_str(&env, "marketplace_activity").into_val(&env));
+            verification_map.set(Symbol::new(&env, "verified_by"), env.current_contract_address().into_val(&env));
+            verification_map.set(Symbol::new(&env, "verification_timestamp"), env.ledger().timestamp().into_val(&env));
+            verification_map.set(Symbol::new(&env, "verification_hash"), BytesN::from_array(&env, &[0u8; 32]).into_val(&env));
+            verification_map.set(Symbol::new(&env, "external_reference"), String::from_str(&env, "tx_ref").into_val(&env));
+            request_map.set(Symbol::new(&env, "verification_data"), verification_map.into_val(&env));
+
             request_map
         };
 
@@ -2826,21 +2609,24 @@ impl Marketplace {
         let token_id: u64 = env.invoke_contract(
             &nft_contract,
             &Symbol::new(&env, "mint_credit_score_nft"),
-            (user, mint_request).into_val(&env),
+            Vec::from_array(&env, [user.into_val(&env), mint_request.into_val(&env)]),
         );
 
         // Log the minting
         let before_state = String::from_str(&env, "{}");
-        let after_state = String::from_str(&env, &format!(
-            "{{\"token_id\":{},\"user\":\"{:?}\",\"score\":{}}}",
-            token_id, user, credit_score
-        ));
+        let after_state = String::from_str(
+            &env,
+            "Credit score NFT minted",
+        );
         let tx_hash = String::from_str(&env, "0x_credit_score_minted");
-        let description = Some(String::from_str(&env, "Credit score NFT minted via marketplace"));
+        let description = Some(String::from_str(
+            &env,
+            "Credit score NFT minted via marketplace",
+        ));
 
         create_audit_log(
             &env,
-            user,
+            user.clone(),
             OperationType::AdminMint,
             before_state,
             after_state,
@@ -2848,18 +2634,20 @@ impl Marketplace {
             description,
         );
 
-        env.events()
-            .publish((Symbol::new(&env, "CreditScoreNFTMinted"),), (token_id, user, credit_score));
+        env.events().publish(
+            (Symbol::new(&env, "CreditScoreNFTMinted"),),
+            (token_id, user, credit_score),
+        );
 
         Ok(token_id)
     }
 
     /// Auto-mint credit score NFT for successful agent purchase
-    pub fn auto_mint_credit_score_on_purchase(
+    pub fn auto_mint_credit_on_purchase(
         env: Env,
         listing_id: u64,
         buyer: Address,
-    ) -> Result<u64, &'static str> {
+    ) -> Result<u64, ContractError> {
         let listing_key = (Symbol::new(&env, "listing"), listing_id);
         let listing: Listing = env
             .storage()
@@ -2873,21 +2661,21 @@ impl Marketplace {
         let credit_score = base_score + value_bonus;
 
         // Check if user already has too many NFTs (prevent spam)
-        let nft_contract = Self::get_credit_score_nft_contract(&env)
-            .ok_or("Credit score NFT contract not set")?;
+        let nft_contract =
+            Self::get_credit_score_nft_contract(env.clone()).ok_or(ContractError::NotInitialized)?;
 
         let existing_nfts: Vec<u64> = env.invoke_contract(
             &nft_contract,
             &Symbol::new(&env, "get_nfts_by_owner"),
-            buyer.into_val(&env),
+            Vec::from_array(&env, [buyer.clone().into_val(&env)]),
         );
 
         if existing_nfts.len() >= 10 {
-            return Err("Maximum NFT limit reached");
+            return Err(ContractError::LimitExceeded);
         }
 
-        Self::mint_credit_score_nft_for_transaction(
-            env,
+        Self::mint_credit_score_tx_nft(
+            env.clone(),
             buyer,
             String::from_str(&env, "agent_purchase"),
             listing.price,
@@ -2898,11 +2686,11 @@ impl Marketplace {
     }
 
     /// Auto-mint credit score NFT for successful auction win
-    pub fn auto_mint_credit_score_on_auction_win(
+    pub fn auto_mint_credit_on_auction(
         env: Env,
         auction_id: u64,
         winner: Address,
-    ) -> Result<u64, &'static str> {
+    ) -> Result<u64, ContractError> {
         let auction = storage::get_auction(&env, auction_id).expect("Auction not found");
 
         // Calculate credit score based on auction activity
@@ -2910,8 +2698,8 @@ impl Marketplace {
         let bid_bonus = ((auction.highest_bid / 10000) as u32).min(150); // Up to 150 points
         let credit_score = base_score + bid_bonus;
 
-        Self::mint_credit_score_nft_for_transaction(
-            env,
+        Self::mint_credit_score_tx_nft(
+            env.clone(),
             winner,
             String::from_str(&env, "auction_win"),
             auction.highest_bid,
@@ -2922,11 +2710,11 @@ impl Marketplace {
     }
 
     /// Auto-mint credit score NFT for successful lease completion
-    pub fn auto_mint_credit_score_on_lease_completion(
+    pub fn auto_mint_credit_on_lease(
         env: Env,
         lease_id: u64,
         lessee: Address,
-    ) -> Result<u64, &'static str> {
+    ) -> Result<u64, ContractError> {
         let lease = storage::get_lease(&env, lease_id).expect("Lease not found");
 
         // Calculate credit score based on lease reliability
@@ -2934,8 +2722,8 @@ impl Marketplace {
         let lease_bonus = ((lease.total_value / 10000) as u32).min(100); // Up to 100 points
         let credit_score = base_score + lease_bonus;
 
-        Self::mint_credit_score_nft_for_transaction(
-            env,
+        Self::mint_credit_score_tx_nft(
+            env.clone(),
             lessee,
             String::from_str(&env, "lease_completion"),
             lease.total_value,
@@ -2946,26 +2734,26 @@ impl Marketplace {
     }
 
     /// Get user's credit score NFTs
-    pub fn get_user_credit_score_nfts(env: Env, user: Address) -> Result<Vec<u64>, &'static str> {
-        let nft_contract = Self::get_credit_score_nft_contract(&env)
-            .ok_or("Credit score NFT contract not set")?;
+    pub fn get_user_credit_score_nfts(env: Env, user: Address) -> Result<Vec<u64>, ContractError> {
+        let nft_contract =
+            Self::get_credit_score_nft_contract(env.clone()).ok_or(ContractError::NotInitialized)?;
 
         let nfts: Vec<u64> = env.invoke_contract(
             &nft_contract,
             &Symbol::new(&env, "get_nfts_by_owner"),
-            user.into_val(&env),
+            Vec::from_array(&env, [user.into_val(&env)]),
         );
 
         Ok(nfts)
     }
 
     /// Get user's aggregated credit score from NFTs
-    pub fn get_user_aggregated_credit_score(env: Env, user: Address) -> Result<u32, &'static str> {
-        let nft_contract = Self::get_credit_score_nft_contract(&env)
-            .ok_or("Credit score NFT contract not set")?;
+    pub fn get_user_aggregated_credit_score(env: Env, user: Address) -> Result<u32, ContractError> {
+        let nft_contract =
+            Self::get_credit_score_nft_contract(env.clone()).ok_or(ContractError::NotInitialized)?;
 
-        let nfts = Self::get_user_credit_score_nfts(&env, user.clone())?;
-        
+        let nfts = Self::get_user_credit_score_nfts(env.clone(), user.clone())?;
+
         if nfts.is_empty() {
             return Ok(300); // Minimum score if no NFTs
         }
@@ -2977,18 +2765,20 @@ impl Marketplace {
             let nft_data: Map<Symbol, Val> = env.invoke_contract(
                 &nft_contract,
                 &Symbol::new(&env, "get_nft"),
-                token_id.into_val(&env),
+                Vec::from_array(&env, [token_id.into_val(&env)]),
             );
 
             // Get credit score and verification status from the map
-            let credit_score = nft_data.get(Symbol::new(&env, "credit_score"))
-                .unwrap_or_else(|| 0.into_val(&env))
+            let credit_score = nft_data
+                .get(Symbol::new(&env, "credit_score"))
+                .unwrap_or_else(|| 0_u32.into_val(&env))
                 .try_into_val(&env)
                 .unwrap_or(300);
-            
-            let verification_status_val = nft_data.get(Symbol::new(&env, "verification_status"))
-                .unwrap_or_else(|| 0.into_val(&env));
-            
+
+            let verification_status_val = nft_data
+                .get(Symbol::new(&env, "verification_status"))
+                .unwrap_or_else(|| 0_u32.into_val(&env));
+
             // Only count verified NFTs (status = 1 for verified)
             if verification_status_val.try_into_val(&env).unwrap_or(0) == 1 {
                 total_score += credit_score;
@@ -3005,31 +2795,40 @@ impl Marketplace {
     }
 
     /// Verify user's credit score NFTs (verification authority only)
-    pub fn verify_user_credit_scores(env: Env, verifier: Address, user: Address) -> Result<(), &'static str> {
-        let nft_contract = Self::get_credit_score_nft_contract(&env)
-            .ok_or("Credit score NFT contract not set")?;
+    pub fn verify_user_credit_scores(
+        env: Env,
+        verifier: Address,
+        user: Address,
+    ) -> Result<(), ContractError> {
+        let nft_contract =
+            Self::get_credit_score_nft_contract(env.clone()).ok_or(ContractError::NotInitialized)?;
 
-        let nfts = Self::get_user_credit_score_nfts(&env, user.clone())?;
+        let nfts = Self::get_user_credit_score_nfts(env.clone(), user.clone())?;
 
         for token_id in nfts.iter() {
             let nft_data: Map<Symbol, Val> = env.invoke_contract(
                 &nft_contract,
                 &Symbol::new(&env, "get_nft"),
-                token_id.into_val(&env),
+                Vec::from_array(&env, [token_id.into_val(&env)]),
             );
 
             // Get verification status from the map
-            let verification_status_val = nft_data.get(Symbol::new(&env, "verification_status"))
+            let verification_status_val = nft_data
+                .get(Symbol::new(&env, "verification_status"))
                 .unwrap_or_else(|| 0.into_val(&env));
-            
+
             // Only verify pending NFTs (status = 0 for pending)
             if verification_status_val.try_into_val(&env).unwrap_or(1) == 0 {
                 let verification_hash = BytesN::from_array(&env, &[1u8; 32]); // Placeholder hash
-                
-                env.invoke_contract(
+
+                env.invoke_contract::<Val>(
                     &nft_contract,
                     &Symbol::new(&env, "verify_credit_score"),
-                    (verifier, token_id, verification_hash).into_val(&env),
+                    Vec::from_array(&env, [
+                        verifier.clone().into_val(&env),
+                        token_id.into_val(&env),
+                        verification_hash.into_val(&env),
+                    ]),
                 );
             }
         }

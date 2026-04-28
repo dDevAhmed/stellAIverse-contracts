@@ -1,12 +1,14 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Symbol, Vec, Map, BytesN};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, Address, BytesN, Env, Map, String, Symbol, Vec,
+};
 mod test;
 
 use stellai_lib::{
     admin,
     audit::{create_audit_log, OperationType},
     errors::ContractError,
-    storage_keys::{ADMIN_KEY},
+    storage_keys::ADMIN_KEY,
     types::RoyaltyInfo,
     validation, ADMIN_KEY,
 };
@@ -32,7 +34,7 @@ pub enum CreditScoreEvent {
 pub struct CreditScoreNFT {
     pub token_id: u64,
     pub owner: Address,
-    pub credit_score: u32,        // 300-850 range
+    pub credit_score: u32, // 300-850 range
     pub score_type: ScoreType,
     pub verification_status: VerificationStatus,
     pub issued_at: u64,
@@ -127,9 +129,10 @@ impl CreditScoreNFT {
 
         // Initialize verification authorities list
         let verification_authorities: Vec<Address> = Vec::new(&env);
-        env.storage()
-            .instance()
-            .set(&Symbol::new(&env, "verification_authorities"), &verification_authorities);
+        env.storage().instance().set(
+            &Symbol::new(&env, "verification_authorities"),
+            &verification_authorities,
+        );
 
         Ok(())
     }
@@ -187,7 +190,7 @@ impl CreditScoreNFT {
         request: MintRequest,
     ) -> Result<u64, ContractError> {
         minter.require_auth();
-        
+
         // Validate credit score range (300-850)
         if request.credit_score < 300 || request.credit_score > 850 {
             return Err(ContractError::InvalidInput);
@@ -224,10 +227,13 @@ impl CreditScoreNFT {
 
         // Create audit log
         let before_state = String::from_str(&env, "{}");
-        let after_state = String::from_str(&env, &format!(
-            "{{\"token_id\":{},\"owner\":\"{:?}\",\"score\":{}}}",
-            token_id, request.owner, request.credit_score
-        ));
+        let after_state = String::from_str(
+            &env,
+            &format!(
+                "{{\"token_id\":{},\"owner\":\"{:?}\",\"score\":{}}}",
+                token_id, request.owner, request.credit_score
+            ),
+        );
         let tx_hash = String::from_str(&env, "0x_credit_score_minted");
         let description = Some(String::from_str(&env, "Credit score NFT minted"));
 
@@ -244,7 +250,12 @@ impl CreditScoreNFT {
         // Emit event
         env.events().publish(
             (Symbol::new(&env, "CreditScoreNFTMinted"),),
-            (token_id, request.owner, request.credit_score, request.score_type),
+            (
+                token_id,
+                request.owner,
+                request.credit_score,
+                request.score_type,
+            ),
         );
 
         Ok(token_id)
@@ -258,7 +269,7 @@ impl CreditScoreNFT {
         verification_hash: BytesN<32>,
     ) -> Result<(), ContractError> {
         verifier.require_auth();
-        
+
         // Verify caller is authorized
         Self::verify_verification_authority(&env, &verifier)?;
 
@@ -306,7 +317,7 @@ impl CreditScoreNFT {
         new_expires_at: u64,
     ) -> Result<(), ContractError> {
         verifier.require_auth();
-        
+
         // Verify caller is authorized
         Self::verify_verification_authority(&env, &verifier)?;
 
@@ -328,12 +339,8 @@ impl CreditScoreNFT {
         Self::store_nft(&env, token_id, &nft);
 
         // Create audit log
-        let before_state = String::from_str(&env, &format!(
-            "{{\"score\":{}}}", old_score
-        ));
-        let after_state = String::from_str(&env, &format!(
-            "{{\"score\":{}}}", new_score
-        ));
+        let before_state = String::from_str(&env, &format!("{{\"score\":{}}}", old_score));
+        let after_state = String::from_str(&env, &format!("{{\"score\":{}}}", new_score));
         let tx_hash = String::from_str(&env, "0x_credit_score_updated");
         let description = Some(String::from_str(&env, "Credit score updated"));
 
@@ -379,12 +386,8 @@ impl CreditScoreNFT {
         Self::store_nft(&env, token_id, &nft);
 
         // Create audit log
-        let before_state = String::from_str(&env, &format!(
-            "{{\"owner\":\"{:?}\"}}", from
-        ));
-        let after_state = String::from_str(&env, &format!(
-            "{{\"owner\":\"{:?}\"}}", to
-        ));
+        let before_state = String::from_str(&env, &format!("{{\"owner\":\"{:?}\"}}", from));
+        let after_state = String::from_str(&env, &format!("{{\"owner\":\"{:?}\"}}", to));
         let tx_hash = String::from_str(&env, "0x_nft_transferred");
         let description = Some(String::from_str(&env, "NFT transferred"));
 
@@ -504,9 +507,10 @@ impl CreditScoreNFT {
     }
 
     fn store_metadata(env: &Env, token_id: u64, metadata: &CreditScoreMetadata) {
-        env.storage()
-            .instance()
-            .set(&Symbol::new(env, &format!("metadata_{}", token_id)), metadata);
+        env.storage().instance().set(
+            &Symbol::new(env, &format!("metadata_{}", token_id)),
+            metadata,
+        );
     }
 
     fn get_metadata(env: &Env, token_id: u64) -> Result<CreditScoreMetadata, ContractError> {

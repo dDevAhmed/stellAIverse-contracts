@@ -555,18 +555,7 @@ pub fn get_fee_transition_state(env: &Env) -> Option<FeeTransitionState> {
     env.storage().instance().get(&DataKey::FeeTransitionState)
 }
 
-pub fn get_last_oracle_update(env: &Env) -> u64 {
-    env.storage()
-        .instance()
-        .get(&DataKey::LastOracleUpdate)
-        .unwrap_or(0)
-}
 
-pub fn set_last_oracle_update(env: &Env, timestamp: u64) {
-    env.storage()
-        .instance()
-        .set(&DataKey::LastOracleUpdate, &timestamp);
-}
 
 /* ---------------- LEASE CONFIGURATION ---------------- */
 

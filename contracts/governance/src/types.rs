@@ -1,5 +1,4 @@
-
-use soroban_sdk::{contracttype, Address, String, Symbol, Val, Vec, Bytes};
+use soroban_sdk::{contracttype, Address, Bytes, String, Symbol, Val, Vec};
 
 /// Vote types for proposals
 #[contracttype]

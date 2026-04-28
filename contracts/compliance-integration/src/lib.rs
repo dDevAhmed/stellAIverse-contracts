@@ -4,7 +4,7 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, Map, String,
     Symbol, Vec,
 };
-use stellai_lib::{admin, audit, validation, rbac};
+use stellai_lib::{admin, audit, rbac, validation};
 
 // Contract errors
 #[contracterror]
@@ -158,7 +158,6 @@ pub struct KycOverrideRequest {
 
 const REPORTS: Symbol = symbol_short!("REPORTS");
 const REVIEWS: Symbol = symbol_short!("REVIEWS");
-const SCORES: Symbol = symbol_short!("SCORES");
 const KYC_RECORDS: Symbol = symbol_short!("KYC_REC");
 const KYC_OVERRIDES: Symbol = symbol_short!("KYC_OVR");
 const NEXT_REPORT_ID: Symbol = symbol_short!("N_REP_ID");
@@ -208,7 +207,9 @@ impl ComplianceIntegrationContract {
         };
 
         env.storage().instance().set(&(REPORTS, report_id), &report);
-        env.storage().instance().set(&NEXT_REPORT_ID, &(report_id + 1));
+        env.storage()
+            .instance()
+            .set(&NEXT_REPORT_ID, &(report_id + 1));
 
         Ok(report_id)
     }
@@ -227,7 +228,7 @@ impl ComplianceIntegrationContract {
         env: Env,
         entity_did: String,
         credential_ids: Vec<u64>,
-        compliance_type: ComplianceType,
+        _compliance_type: ComplianceType,
         caller: Address,
     ) -> Result<bool, Error> {
         caller.require_auth();
@@ -242,10 +243,10 @@ impl ComplianceIntegrationContract {
     /// Requires verified KYC for the assessor (Address).
     pub fn create_risk_assessment(
         env: Env,
-        entity_did: String,
-        risk_level: RiskLevel,
-        jurisdictions: Vec<String>,
-        mitigation_strategy: Option<String>,
+        _entity_did: String,
+        _risk_level: RiskLevel,
+        _jurisdictions: Vec<String>,
+        _mitigation_strategy: Option<String>,
         assessor: Address,
     ) -> Result<u64, Error> {
         assessor.require_auth();
@@ -253,7 +254,9 @@ impl ComplianceIntegrationContract {
 
         // Assessment record creation logic
         let assessment_id = Self::get_next_report_id(&env);
-        env.storage().instance().set(&NEXT_REPORT_ID, &(assessment_id + 1));
+        env.storage()
+            .instance()
+            .set(&NEXT_REPORT_ID, &(assessment_id + 1));
         Ok(assessment_id)
     }
 
@@ -291,7 +294,9 @@ impl ComplianceIntegrationContract {
         };
 
         env.storage().instance().set(&(REVIEWS, review_id), &review);
-        env.storage().instance().set(&NEXT_REVIEW_ID, &(review_id + 1));
+        env.storage()
+            .instance()
+            .set(&NEXT_REVIEW_ID, &(review_id + 1));
 
         Ok(review_id)
     }
@@ -351,7 +356,7 @@ impl ComplianceIntegrationContract {
         }
 
         let mut record = Self::get_kyc_record(&env, &subject)?;
-        
+
         // Expiry check for Pending requests
         if record.status == KycStatus::Pending {
             if let Some(expires_at) = record.expires_at {
@@ -402,13 +407,17 @@ impl ComplianceIntegrationContract {
         subject: Address,
     ) -> Result<u64, Error> {
         rbac::require_governance_role(&env, &governance).map_err(|_| Error::Unauthorized)?;
-        
+
         let record = Self::get_kyc_record(&env, &subject)?;
         if !Self::is_terminal_kyc_status(record.status) {
             return Err(Error::KycInvalidTransition);
         }
 
-        if env.storage().instance().has(&(KYC_OVERRIDES, subject.clone())) {
+        if env
+            .storage()
+            .instance()
+            .has(&(KYC_OVERRIDES, subject.clone()))
+        {
             return Err(Error::KycOverrideAlreadyScheduled);
         }
 
@@ -421,7 +430,9 @@ impl ComplianceIntegrationContract {
             created_at: now,
         };
 
-        env.storage().instance().set(&(KYC_OVERRIDES, subject.clone()), &request);
+        env.storage()
+            .instance()
+            .set(&(KYC_OVERRIDES, subject.clone()), &request);
         Ok(execute_after)
     }
 
@@ -432,7 +443,7 @@ impl ComplianceIntegrationContract {
         subject: Address,
     ) -> Result<(), Error> {
         rbac::require_governance_role(&env, &governance).map_err(|_| Error::Unauthorized)?;
-        
+
         let request: KycOverrideRequest = env
             .storage()
             .instance()
@@ -457,7 +468,9 @@ impl ComplianceIntegrationContract {
         record.expires_at = Some(now + KYC_PENDING_EXPIRY_SECS);
 
         Self::put_kyc_record(&env, &subject, &record);
-        env.storage().instance().remove(&(KYC_OVERRIDES, subject.clone()));
+        env.storage()
+            .instance()
+            .remove(&(KYC_OVERRIDES, subject.clone()));
 
         env.events().publish(
             (Symbol::new(&env, "kyc"), Symbol::new(&env, "override")),
@@ -499,7 +512,9 @@ impl ComplianceIntegrationContract {
     }
 
     fn put_kyc_record(env: &Env, subject: &Address, record: &KycRecord) {
-        env.storage().instance().set(&(KYC_RECORDS, subject.clone()), record);
+        env.storage()
+            .instance()
+            .set(&(KYC_RECORDS, subject.clone()), record);
     }
 
     fn is_terminal_kyc_status(status: KycStatus) -> bool {

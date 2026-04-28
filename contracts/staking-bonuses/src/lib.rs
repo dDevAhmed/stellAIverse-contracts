@@ -33,8 +33,8 @@ const BONUS_PERCENT_PER_MONTH: i128 = 5;
 
 /// Governance vote count thresholds for multiplier tiers (issue #136).
 /// Stakers who have cast ≥ threshold votes in the last month receive the multiplier.
-const MULTIPLIER_TIER1_VOTES: u32 = 1;  // ≥1 vote  → 1.25× (125 bps)
-const MULTIPLIER_TIER2_VOTES: u32 = 5;  // ≥5 votes → 1.50× (150 bps)
+const MULTIPLIER_TIER1_VOTES: u32 = 1; // ≥1 vote  → 1.25× (125 bps)
+const MULTIPLIER_TIER2_VOTES: u32 = 5; // ≥5 votes → 1.50× (150 bps)
 const MULTIPLIER_TIER3_VOTES: u32 = 10; // ≥10 votes → 2.00× (200 bps)
 
 /// Storage key for per-user governance vote count (set by governance contract or admin).

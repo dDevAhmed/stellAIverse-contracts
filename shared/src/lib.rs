@@ -9,6 +9,7 @@ use soroban_sdk::{contracttype, Address, Bytes, String, Vec};
 /// Module identifiers for storage key namespacing.
 /// Each module MUST use its identifier as a prefix for all storage keys
 /// to prevent cross-module key collisions.
+#[contracttype]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ModuleId {
     AgentNft = 0,
@@ -254,31 +255,31 @@ mod tests {
     #[test]
     fn test_no_collision_across_modules() {
         let env = Env::default();
-        
+
         // Create keys from different modules with same category/identifier
         let market_key = NamespacedKey {
             module: ModuleId::Marketplace,
             category: String::from_str(&env, "agent"),
             identifier: String::from_str(&env, "1"),
         };
-        
+
         let evolution_key = NamespacedKey {
             module: ModuleId::Evolution,
             category: String::from_str(&env, "agent"),
             identifier: String::from_str(&env, "1"),
         };
-        
+
         let nft_key = NamespacedKey {
             module: ModuleId::AgentNft,
             category: String::from_str(&env, "agent"),
             identifier: String::from_str(&env, "1"),
         };
-        
+
         // All should be valid
         assert!(validate_namespaced_key(&market_key));
         assert!(validate_namespaced_key(&evolution_key));
         assert!(validate_namespaced_key(&nft_key));
-        
+
         // Keys should be different due to different module IDs
         assert_ne!(market_key.module, evolution_key.module);
         assert_ne!(market_key.module, nft_key.module);
@@ -288,7 +289,7 @@ mod tests {
     #[test]
     fn test_fuzz_dynamic_keys_no_collision() {
         let env = Env::default();
-        
+
         // Simulate dynamic key generation across multiple modules
         let modules = [
             ModuleId::AgentNft,
@@ -297,13 +298,13 @@ mod tests {
             ModuleId::Governance,
             ModuleId::Compliance,
         ];
-        
+
         let categories = ["user", "agent", "listing", "request", "proposal"];
         let identifiers = ["1", "2", "100", "999", "dynamic_key"];
-        
+
         // Generate all combinations and verify uniqueness
         let mut keys: Vec<(ModuleId, String, String)> = Vec::new(&env);
-        
+
         for module in &modules {
             for category in &categories {
                 for identifier in &identifiers {
@@ -312,28 +313,30 @@ mod tests {
                         category: String::from_str(&env, category),
                         identifier: String::from_str(&env, identifier),
                     };
-                    
+
                     // Validate key
                     assert!(validate_namespaced_key(&key));
-                    
+
                     // Check for duplicates (should not exist due to module prefix)
                     for existing in keys.iter() {
-                        let is_duplicate = 
-                            existing.0 == key.module &&
-                            existing.1 == key.category &&
-                            existing.2 == key.identifier;
-                        
+                        let is_duplicate = existing.0 == key.module
+                            && existing.1 == key.category
+                            && existing.2 == key.identifier;
+
                         if is_duplicate {
                             panic!("Duplicate key detected: {:?}", key);
                         }
                     }
-                    
+
                     keys.push_back((key.module, key.category, key.identifier));
                 }
             }
         }
-        
+
         // Total keys should be modules * categories * identifiers
-        assert_eq!(keys.len(), (modules.len() * categories.len() * identifiers.len()) as u32);
+        assert_eq!(
+            keys.len(),
+            (modules.len() * categories.len() * identifiers.len()) as u32
+        );
     }
 }

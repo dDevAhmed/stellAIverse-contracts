@@ -21,14 +21,20 @@ impl ReferralRewards {
             return Err(ContractError::AlreadyInitialized);
         }
         admin_addr.require_auth();
-        env.storage().instance().set(&Symbol::new(&env, ADMIN_KEY), &admin_addr);
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, ADMIN_KEY), &admin_addr);
         Ok(())
     }
 
     /// Register a new referral.
-    pub fn register_referral(env: Env, referred: Address, referrer: Address) -> Result<(), ContractError> {
+    pub fn register_referral(
+        env: Env,
+        referred: Address,
+        referrer: Address,
+    ) -> Result<(), ContractError> {
         referred.require_auth();
-        
+
         if referred == referrer {
             return Err(ContractError::SameAddressTransfer); // Use appropriate error
         }
@@ -52,7 +58,10 @@ impl ReferralRewards {
         env.storage().instance().set(&count_key, &count);
 
         env.events().publish(
-            (Symbol::new(&env, "referral"), Symbol::new(&env, "registered")),
+            (
+                Symbol::new(&env, "referral"),
+                Symbol::new(&env, "registered"),
+            ),
             (referred, referrer),
         );
 
@@ -60,7 +69,12 @@ impl ReferralRewards {
     }
 
     /// Add rewards to a referrer (called by an authorized contract/admin).
-    pub fn add_reward(env: Env, caller: Address, referrer: Address, amount: i128) -> Result<(), ContractError> {
+    pub fn add_reward(
+        env: Env,
+        caller: Address,
+        referrer: Address,
+        amount: i128,
+    ) -> Result<(), ContractError> {
         caller.require_auth();
         // In a real scenario, we might verify if caller is an authorized module
         // For now, let's allow admin or a specific role.
@@ -76,7 +90,10 @@ impl ReferralRewards {
         env.storage().instance().set(&reward_key, &balance);
 
         env.events().publish(
-            (Symbol::new(&env, "referral"), Symbol::new(&env, "reward_added")),
+            (
+                Symbol::new(&env, "referral"),
+                Symbol::new(&env, "reward_added"),
+            ),
             (referrer, amount),
         );
 

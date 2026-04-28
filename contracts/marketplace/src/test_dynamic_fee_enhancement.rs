@@ -1,7 +1,8 @@
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{Address, Symbol, Env, String};
+    use soroban_sdk::{contract, contractimpl, testutils, Address, BytesN, Env, Symbol, Vec};
+    use crate::Marketplace;
 
     #[test]
     fn test_dynamic_fee_adjustment_enhancement() {
@@ -11,7 +12,7 @@ mod tests {
 
         // Initialize marketplace with dynamic fee adjustment
         Marketplace::init_contract(env.clone(), admin.clone());
-        
+
         // Initialize fee adjustment with enhanced parameters
         Marketplace::init_fee_adjustment(
             env.clone(),
@@ -20,7 +21,7 @@ mod tests {
             oracle_id.clone(),
             oracle_id.clone(), // Use same oracle for simplicity in test
             oracle_id.clone(),
-            50,  // min 0.5%
+            50,   // min 0.5%
             1000, // max 10%
             300,  // 5 minute adjustment window
         );
@@ -63,7 +64,6 @@ mod tests {
         );
         assert_eq!(congestion_value, 75); // Should use fallback in test
 
-        println!("✅ Enhanced dynamic fee adjustment tests passed!");
     }
 
     #[test]
@@ -91,7 +91,6 @@ mod tests {
         let volatility_high = Marketplace::calculate_volatility_factor(70);
         assert_eq!(volatility_high, 1180); // 0.9x + (70 * 4) = 1180
 
-        println!("✅ Fee calculation factor tests passed!");
     }
 
     #[test]
@@ -119,11 +118,10 @@ mod tests {
 
         // Test processing transition step
         Marketplace::process_fee_transition(env.clone());
-        
+
         let updated_state = storage::get_fee_transition_state(&env).unwrap();
         assert_eq!(updated_state.current_step, 6);
 
-        println!("✅ Fee transition system tests passed!");
     }
 
     #[test]
@@ -132,25 +130,16 @@ mod tests {
         let oracle_id = Address::generate(&env);
 
         // Test with valid range
-        let valid_value = Marketplace::get_oracle_value_by_key(
-            &env,
-            &oracle_id,
-            "network_congestion",
-            50,
-        );
+        let valid_value =
+            Marketplace::get_oracle_value_by_key(&env, &oracle_id, "network_congestion", 50);
         assert_eq!(valid_value, 50);
 
         // Test oracle data age validation
         // In test mode, this will use fallback values
-        let stale_value = Marketplace::get_oracle_value_by_key(
-            &env,
-            &oracle_id,
-            "platform_utilization",
-            25,
-        );
+        let stale_value =
+            Marketplace::get_oracle_value_by_key(&env, &oracle_id, "platform_utilization", 25);
         assert_eq!(stale_value, 25);
 
-        println!("✅ Oracle data validation tests passed!");
     }
 
     #[test]
@@ -180,6 +169,5 @@ mod tests {
         assert_eq!(retrieved.old_fee_bps, 250);
         assert_eq!(retrieved.new_fee_bps, 300);
 
-        println!("✅ Fee adjustment history tests passed!");
     }
 }

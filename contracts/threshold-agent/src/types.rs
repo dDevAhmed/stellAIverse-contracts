@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, Bytes};
+use soroban_sdk::{contracttype, Address, Bytes, Vec};
 
 #[contracttype]
 pub struct ThresholdKeyShare {
@@ -11,7 +11,8 @@ pub struct ThresholdKeyShare {
     pub created_at: u64,
 }
 
-#[derive(Clone)]
+#[contracttype]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ProposalStatus {
     Pending,
     Executed,
