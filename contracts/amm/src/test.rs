@@ -276,6 +276,309 @@ fn test_multiple_pools() {
     assert_eq!(info_1.fee_bps, 50);
 }
 
+// ─── MULTI-HOP SWAP TESTS ────────────────────────────────────────
+
+#[test]
+fn test_find_best_route_direct() {
+    let (env, admin, amm, token_a, token_b) = setup_env();
+
+    let provider = Address::generate(&env);
+    let pool_id = amm.create_pool(&admin, &token_a, &token_b, &30);
+
+    // Add liquidity
+    mint_tokens(&env, &token_a, &provider, 100_000);
+    mint_tokens(&env, &token_b, &provider, 100_000);
+    amm.add_liquidity(&provider, &pool_id, &100_000, &100_000);
+
+    // Find direct route
+    let route = amm.find_best_route(&token_a, &token_b, &1_000, &2);
+    
+    assert_eq!(route.token_in, token_a);
+    assert_eq!(route.token_out, token_b);
+    assert_eq!(route.amount_in, 1_000);
+    assert!(route.amount_out > 0);
+    assert_eq!(route.hops.len(), 1);
+    assert_eq!(route.hops.get(0).unwrap().pool_id, pool_id);
+}
+
+#[test]
+fn test_execute_multi_hop_swap_single_hop() {
+    let (env, admin, amm, token_a, token_b) = setup_env();
+
+    let provider = Address::generate(&env);
+    let user = Address::generate(&env);
+    let pool_id = amm.create_pool(&admin, &token_a, &token_b, &30);
+
+    // Add liquidity
+    mint_tokens(&env, &token_a, &provider, 100_000);
+    mint_tokens(&env, &token_b, &provider, 100_000);
+    amm.add_liquidity(&provider, &pool_id, &100_000, &100_000);
+
+    // Find and execute route
+    let route = amm.find_best_route(&token_a, &token_b, &1_000, &2);
+    mint_tokens(&env, &token_a, &user, 1_000);
+    
+    let output = amm.execute_multi_hop_swap(&user, route, &0);
+    assert!(output > 0);
+    assert!(output < 1_000); // Less due to fees
+}
+
+#[test]
+fn test_find_best_route_two_hop() {
+    let (env, admin, amm, token_a, token_b) = setup_env();
+    let token_c_id = env.register(MockToken, ());
+
+    let provider = Address::generate(&env);
+    
+    // Create pools: A-B and B-C
+    let pool_ab = amm.create_pool(&admin, &token_a, &token_b, &30);
+    let pool_bc = amm.create_pool(&admin, &token_b, &token_c_id, &30);
+
+    // Add liquidity to both pools
+    mint_tokens(&env, &token_a, &provider, 100_000);
+    mint_tokens(&env, &token_b, &provider, 200_000);
+    amm.add_liquidity(&provider, &pool_ab, &100_000, &200_000);
+    
+    mint_tokens(&env, &token_b, &provider, 100_000);
+    mint_tokens(&env, &token_c_id, &provider, 100_000);
+    amm.add_liquidity(&provider, &pool_bc, &100_000, &100_000);
+
+    // Find 2-hop route from A to C
+    let route = amm.find_best_route(&token_a, &token_c_id, &1_000, &3);
+    
+    assert_eq!(route.token_in, token_a);
+    assert_eq!(route.token_out, token_c_id);
+    assert_eq!(route.amount_in, 1_000);
+    assert!(route.amount_out > 0);
+    assert_eq!(route.hops.len(), 2);
+}
+
+#[test]
+fn test_execute_multi_hop_swap_two_hop() {
+    let (env, admin, amm, token_a, token_b) = setup_env();
+    let token_c_id = env.register(MockToken, ());
+
+    let provider = Address::generate(&env);
+    let user = Address::generate(&env);
+    
+    // Create pools: A-B and B-C
+    let pool_ab = amm.create_pool(&admin, &token_a, &token_b, &30);
+    let pool_bc = amm.create_pool(&admin, &token_b, &token_c_id, &30);
+
+    // Add liquidity to both pools
+    mint_tokens(&env, &token_a, &provider, 100_000);
+    mint_tokens(&env, &token_b, &provider, 200_000);
+    amm.add_liquidity(&provider, &pool_ab, &100_000, &200_000);
+    
+    mint_tokens(&env, &token_b, &provider, 100_000);
+    mint_tokens(&env, &token_c_id, &provider, 100_000);
+    amm.add_liquidity(&provider, &pool_bc, &100_000, &100_000);
+
+    // Find and execute 2-hop route
+    let route = amm.find_best_route(&token_a, &token_c_id, &1_000, &3);
+    mint_tokens(&env, &token_a, &user, 1_000);
+    
+    let output = amm.execute_multi_hop_swap(&user, route, &0);
+    assert!(output > 0);
+}
+
+// ─── ADMIN & RISK MANAGEMENT TESTS ────────────────────────────────
+
+#[test]
+fn test_pause_resume_trading() {
+    let (env, admin, amm, token_a, token_b) = setup_env();
+    
+    // Pause trading
+    amm.pause_trading(&admin);
+    
+    // Try to swap while paused - should fail
+    let user = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let pool_id = amm.create_pool(&admin, &token_a, &token_b, &30);
+    
+    mint_tokens(&env, &token_a, &provider, 100_000);
+    mint_tokens(&env, &token_b, &provider, 100_000);
+    amm.add_liquidity(&provider, &pool_id, &100_000, &100_000);
+    
+    mint_tokens(&env, &token_a, &user, 1_000);
+    
+    // This should panic because trading is paused
+    let result = std::panic::catch_unwind(|| {
+        amm.swap(&user, &pool_id, &token_a, &1_000, &0);
+    });
+    assert!(result.is_err());
+    
+    // Resume trading
+    amm.resume_trading(&admin);
+    
+    // Now swap should work
+    let output = amm.swap(&user, &pool_id, &token_a, &1_000, &0);
+    assert!(output > 0);
+}
+
+#[test]
+#[should_panic(expected = "Unauthorized")]
+fn test_unauthorized_pause_trading() {
+    let (env, admin, amm, token_a, token_b) = setup_env();
+    let unauthorized = Address::generate(&env);
+    
+    // This should panic because caller is not admin
+    amm.pause_trading(&unauthorized);
+}
+
+#[test]
+fn test_set_admin() {
+    let (env, admin, amm, token_a, token_b) = setup_env();
+    let new_admin = Address::generate(&env);
+    
+    // Set new admin
+    amm.set_admin(&admin, &new_admin);
+    
+    // New admin should be able to pause trading
+    amm.pause_trading(&new_admin);
+    
+    // Old admin should not be able to pause trading anymore
+    let result = std::panic::catch_unwind(|| {
+        amm.resume_trading(&admin);
+    });
+    assert!(result.is_err());
+}
+
+#[test]
+#[should_panic(expected = "Unauthorized")]
+fn test_unauthorized_set_admin() {
+    let (env, admin, amm, token_a, token_b) = setup_env();
+    let unauthorized = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    
+    // This should panic because caller is not admin
+    amm.set_admin(&unauthorized, &new_admin);
+}
+
+#[test]
+fn test_risk_parameters() {
+    let (env, admin, amm, token_a, token_b) = setup_env();
+    
+    let params = RiskParams {
+        max_position_per_user: 1_000_000,
+        max_position_per_asset: 5_000_000,
+        concentration_threshold_bps: 2500, // 25%
+        circuit_breaker_threshold_bps: 1000, // 10%
+        circuit_breaker_cooldown: 1800, // 30 minutes
+        min_lp_token_threshold: 500,
+    };
+    
+    amm.set_risk_parameters(&admin, params);
+    
+    // Check that parameters were set
+    let user = Address::generate(&env);
+    let (total_pos, concentration, threshold) = amm.get_risk_metrics(&user);
+    assert_eq!(total_pos, 0); // No position yet
+    assert_eq!(concentration, 0); // No concentration
+    assert_eq!(threshold, 2500); // New threshold
+}
+
+#[test]
+fn test_circuit_breaker() {
+    let (env, admin, amm, token_a, token_b) = setup_env();
+    
+    // Trigger circuit breaker
+    amm.trigger_circuit_breaker(&admin, String::from_str(&env, "Market volatility"));
+    
+    // Try to swap while circuit breaker is active - should fail
+    let user = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let pool_id = amm.create_pool(&admin, &token_a, &token_b, &30);
+    
+    mint_tokens(&env, &token_a, &provider, 100_000);
+    mint_tokens(&env, &token_b, &provider, 100_000);
+    amm.add_liquidity(&provider, &pool_id, &100_000, &100_000);
+    
+    mint_tokens(&env, &token_a, &user, 1_000);
+    
+    // This should panic because circuit breaker is active
+    let result = std::panic::catch_unwind(|| {
+        amm.swap(&user, &pool_id, &token_a, &1_000, &0);
+    });
+    assert!(result.is_err());
+}
+
+// ─── ROUNDING PROTECTION TESTS ──────────────────────────────────────
+
+#[test]
+#[should_panic(expected = "Liquidity too small")]
+fn test_minimum_lp_token_threshold() {
+    let (env, admin, amm, token_a, token_b) = setup_env();
+    
+    // Set high minimum threshold
+    let params = RiskParams {
+        max_position_per_user: 1_000_000_000,
+        max_position_per_asset: 10_000_000_000,
+        concentration_threshold_bps: 3000,
+        circuit_breaker_threshold_bps: 1500,
+        circuit_breaker_cooldown: 3600,
+        min_lp_token_threshold: 10_000, // High threshold
+    };
+    amm.set_risk_parameters(&admin, params);
+    
+    let provider = Address::generate(&env);
+    let pool_id = amm.create_pool(&admin, &token_a, &token_b, &30);
+    
+    // Try to add very small liquidity - should fail
+    mint_tokens(&env, &token_a, &provider, 100);
+    mint_tokens(&env, &token_b, &provider, 100);
+    amm.add_liquidity(&provider, &pool_id, &100, &100);
+}
+
+#[test]
+#[should_panic(expected = "Deposit ratio deviates too much")]
+fn test_liquidity_ratio_protection() {
+    let (env, admin, amm, token_a, token_b) = setup_env();
+    
+    let provider = Address::generate(&env);
+    let pool_id = amm.create_pool(&admin, &token_a, &token_b, &30);
+    
+    // Add initial liquidity with balanced ratio
+    mint_tokens(&env, &token_a, &provider, 10_000);
+    mint_tokens(&env, &token_b, &provider, 10_000);
+    amm.add_liquidity(&provider, &pool_id, &10_000, &10_000);
+    
+    // Try to add liquidity with very unbalanced ratio - should fail
+    let provider2 = Address::generate(&env);
+    mint_tokens(&env, &token_a, &provider2, 10_000);
+    mint_tokens(&env, &token_b, &provider2, 100); // Very unbalanced
+    amm.add_liquidity(&provider2, &pool_id, &10_000, &100);
+}
+
+#[test]
+#[should_panic(expected = "Remaining LP tokens below minimum threshold")]
+fn test_remove_liquidity_dust_protection() {
+    let (env, admin, amm, token_a, token_b) = setup_env();
+    
+    // Set high minimum threshold
+    let params = RiskParams {
+        max_position_per_user: 1_000_000_000,
+        max_position_per_asset: 10_000_000_000,
+        concentration_threshold_bps: 3000,
+        circuit_breaker_threshold_bps: 1500,
+        circuit_breaker_cooldown: 3600,
+        min_lp_token_threshold: 1000,
+    };
+    amm.set_risk_parameters(&admin, params);
+    
+    let provider = Address::generate(&env);
+    let pool_id = amm.create_pool(&admin, &token_a, &token_b, &30);
+    
+    // Add liquidity
+    mint_tokens(&env, &token_a, &provider, 10_000);
+    mint_tokens(&env, &token_b, &provider, 10_000);
+    let lp_tokens = amm.add_liquidity(&provider, &pool_id, &10_000, &10_000);
+    
+    // Try to remove most but not all liquidity, leaving dust - should fail
+    let dust_amount = lp_tokens - 500; // Leave 500 LP tokens (below threshold)
+    amm.remove_liquidity(&provider, &pool_id, &dust_amount);
+}
+
 // Issue #215: Tests for cache invalidation
 #[test]
 fn test_cache_invalidation_on_add_liquidity() {
