@@ -43,8 +43,7 @@ impl Oracle {
 
     /// Verify admin — always re-reads from storage (Issue #152)
     fn verify_admin(env: &Env, caller: &Address) {
-        rbac::require_admin(env, caller)
-            .unwrap_or_else(|_| panic!("Caller is not admin"));
+        rbac::require_admin(env, caller).unwrap_or_else(|_| panic!("Caller is not admin"));
     }
 
     /// Check provider is registered — always re-reads from storage (Issue #152)

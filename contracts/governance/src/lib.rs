@@ -1,7 +1,8 @@
 #![no_std]
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, Env, String, Symbol, Val, Vec,
+    contract, contracterror, contractimpl, contracttype, token, Address, Env, String, Symbol, Val,
+    Vec,
 };
 
 mod storage;
@@ -10,9 +11,9 @@ mod types;
 #[cfg(test)]
 mod test;
 
+use stellai_lib::rbac::{self, RoleType};
 use storage::*;
 use types::*;
-use stellai_lib::rbac::{self, RoleType};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -153,7 +154,7 @@ impl Governance {
         let min_deposit = get_min_proposal_deposit(&env);
         let governance_token = get_governance_token(&env);
         let token_client = token::Client::new(&env, &governance_token);
-        
+
         let contract_address = env.current_contract_address();
         token_client.transfer(&proposer, &contract_address, &(min_deposit as i128));
 
@@ -189,12 +190,12 @@ impl Governance {
         admin.require_auth();
         require_admin(&env, &admin);
 
-        let waitlist_proposal = get_waitlist_proposal(&env, waitlist_id)
-            .expect("Waitlisted proposal not found");
+        let waitlist_proposal =
+            get_waitlist_proposal(&env, waitlist_id).expect("Waitlisted proposal not found");
 
         let proposal_id = increment_proposal_counter(&env);
         let current_time = env.ledger().timestamp();
-        
+
         let proposal = Proposal {
             proposal_id,
             title: waitlist_proposal.title,
@@ -234,8 +235,8 @@ impl Governance {
     pub fn cancel_waitlist_proposal(env: Env, proposer: Address, waitlist_id: u64) {
         proposer.require_auth();
 
-        let waitlist_proposal = get_waitlist_proposal(&env, waitlist_id)
-            .expect("Waitlisted proposal not found");
+        let waitlist_proposal =
+            get_waitlist_proposal(&env, waitlist_id).expect("Waitlisted proposal not found");
 
         if waitlist_proposal.proposer != proposer {
             panic!("Only the proposer can cancel");
@@ -276,7 +277,8 @@ impl Governance {
             0
         };
 
-        let delegated_power = Self::calculate_delegated_power_to(&env, &address, env.ledger().timestamp());
+        let delegated_power =
+            Self::calculate_delegated_power_to(&env, &address, env.ledger().timestamp());
 
         let own_delegated_away = if let Some(delegation) = get_delegation(&env, &address) {
             delegation.amount
@@ -295,7 +297,13 @@ impl Governance {
     }
 
     /// Delegate voting power to another address with expiry
-    pub fn delegate_voting_power(env: Env, delegator: Address, delegatee: Address, amount: u128, expires_at: Option<u64>) {
+    pub fn delegate_voting_power(
+        env: Env,
+        delegator: Address,
+        delegatee: Address,
+        amount: u128,
+        expires_at: Option<u64>,
+    ) {
         delegator.require_auth();
 
         if delegator == delegatee {
@@ -312,7 +320,7 @@ impl Governance {
 
         // Cache current timestamp to avoid multiple calls
         let current_time = env.ledger().timestamp();
-        
+
         let escrow_power = if let Some(escrow) = get_vote_escrow(&env, &delegator) {
             if escrow.lock_end > current_time {
                 (escrow.amount as u128 * escrow.multiplier as u128) / 10000u128
@@ -324,7 +332,7 @@ impl Governance {
         };
 
         let available_power = base_balance + escrow_power;
-        
+
         if amount > available_power {
             panic!("Insufficient voting power to delegate");
         }
@@ -356,7 +364,7 @@ impl Governance {
         delegator.require_auth();
 
         let old_delegation = get_delegation(&env, &delegator).expect("No delegation to remove");
-        
+
         storage::remove_delegator_from_list(&env, &old_delegation.delegatee, &delegator);
         env.storage()
             .instance()
@@ -389,7 +397,7 @@ impl Governance {
         // Pre-calculate multiplier to avoid repeated arithmetic
         let multiplier = 20000u32 + ((lock_duration_weeks - 4) * 20000u32) / 48;
         let contract_address = env.current_contract_address();
-        
+
         // Transfer tokens first
         token_client.transfer(&locker, &contract_address, &(amount as i128));
 
@@ -457,38 +465,40 @@ impl Governance {
     pub fn cast_vote(env: Env, voter: Address, proposal_id: u64, vote_type: VoteType) {
         voter.require_auth();
 
+        // ─── SNAPSHOT PHASE ───
         let mut proposal = get_proposal(&env, proposal_id).expect("Proposal not found");
-
-        // Check if voting period is active
         let current_time = env.ledger().timestamp();
+        let existing_vote = get_vote(&env, proposal_id, &voter);
+        let snapshot_exists = get_delegation_snapshot(&env, proposal_id).is_some();
+        let mechanism = get_voting_mechanism(&env);
+        let voting_power = Self::calculate_total_voting_power(&env, &voter);
+
+        // ─── VALIDATION PHASE ───
         if current_time < proposal.voting_starts {
             panic!("Voting has not started yet");
         }
         if current_time > proposal.voting_ends {
             panic!("Voting period has ended");
         }
-
         if proposal.status != ProposalStatus::Active {
             panic!("Proposal is not active");
         }
-
-        // Check if already voted
-        if get_vote(&env, proposal_id, &voter).is_some() {
+        if existing_vote.is_some() {
             panic!("Already voted on this proposal");
         }
-
-        // Create delegation snapshot for secure voting if not exists
-        if get_delegation_snapshot(&env, proposal_id).is_none() {
-            Self::create_delegation_snapshot(&env, proposal_id);
-        }
-
-        // Calculate voting power
-        let voting_power = Self::calculate_total_voting_power(&env, &voter);
-        let (vote_weight, voting_power_used) = Self::calculate_vote_weight(&env, voting_power);
-
         if voting_power == 0 {
             panic!("No voting power");
         }
+
+        // ─── MUTATION PHASE ───
+
+        // Create delegation snapshot for secure voting if not exists
+        if !snapshot_exists {
+            Self::create_delegation_snapshot(&env, proposal_id);
+        }
+
+        let (vote_weight, voting_power_used) =
+            Self::calculate_vote_weight_internal(mechanism, voting_power);
 
         // Record vote
         let vote = Vote {
@@ -511,14 +521,21 @@ impl Governance {
 
         env.events().publish(
             (Symbol::new(&env, "VoteCast"),),
-            (proposal_id, voter, vote_type, vote_weight, voting_power_used),
+            (
+                proposal_id,
+                voter,
+                vote_type,
+                vote_weight,
+                voting_power_used,
+            ),
         );
     }
 
     /// Calculate vote weight based on voting mechanism (linear or quadratic)
-    fn calculate_vote_weight(env: &Env, voting_power: u128) -> (u128, u128) {
-        let mechanism = get_voting_mechanism(env);
-        
+    fn calculate_vote_weight_internal(
+        mechanism: VotingMechanism,
+        voting_power: u128,
+    ) -> (u128, u128) {
         match mechanism {
             VotingMechanism::Linear => {
                 // Linear voting: 1 token = 1 vote
@@ -538,19 +555,19 @@ impl Governance {
         if n == 0 || n == 1 {
             return n;
         }
-        
+
         let mut low = 1u128;
         let mut high = n;
         let mut result = 0u128;
-        
+
         while low <= high {
             let mid = (low + high) / 2;
             let mid_squared = mid.checked_mul(mid).unwrap_or(u128::MAX);
-            
+
             if mid_squared == n {
                 return mid;
             }
-            
+
             if mid_squared < n {
                 low = mid + 1;
                 result = mid;
@@ -558,7 +575,7 @@ impl Governance {
                 high = mid - 1;
             }
         }
-        
+
         result
     }
 
@@ -567,7 +584,7 @@ impl Governance {
         let current_block = env.ledger().sequence();
         let mut delegator_powers = Vec::new(env);
         let mut total_delegated_power = 0u128;
-        
+
         // In a real implementation, we would iterate through all delegations
         // For now, we create an empty snapshot as a placeholder
         let snapshot = DelegationSnapshot {
@@ -575,7 +592,7 @@ impl Governance {
             total_delegated_power,
             delegator_powers,
         };
-        
+
         set_delegation_snapshot(env, proposal_id, &snapshot);
     }
 
@@ -595,9 +612,9 @@ impl Governance {
     pub fn update_voting_mechanism(env: Env, admin: Address, mechanism: VotingMechanism) {
         admin.require_auth();
         require_admin(&env, &admin);
-        
+
         set_voting_mechanism(&env, &mechanism);
-        
+
         env.events().publish(
             (Symbol::new(&env, "VotingMechanismUpdated"),),
             (admin, mechanism),
@@ -613,7 +630,7 @@ impl Governance {
 
         // Cache timestamp to avoid multiple calls
         let current_time = env.ledger().timestamp();
-        
+
         // Add vote escrow power
         let escrow_power = if let Some(escrow) = get_vote_escrow(env, address) {
             if escrow.lock_end > current_time {
@@ -685,11 +702,14 @@ impl Governance {
 
     /// Assign governance role to an address (admin only)
     /// Ensures mutual exclusion with KYC operator roles
-    pub fn assign_governance_role(env: Env, admin: Address, new_governance: Address) -> Result<(), Error> {
+    pub fn assign_governance_role(
+        env: Env,
+        admin: Address,
+        new_governance: Address,
+    ) -> Result<(), Error> {
         // Validate caller is admin using enhanced RBAC
-        rbac::require_admin_indirect_safe(&env, &admin)
-            .map_err(|_| Error::Unauthorized)?;
-        
+        rbac::require_admin_indirect_safe(&env, &admin).map_err(|_| Error::Unauthorized)?;
+
         // Use RBAC module for role assignment with mutual exclusion
         rbac::assign_governance_role(&env, &admin, &new_governance)
             .map_err(|_| Error::Unauthorized)?;
@@ -704,11 +724,14 @@ impl Governance {
 
     /// Assign KYC operator role to an address (admin only)
     /// Ensures mutual exclusion with governance roles
-    pub fn assign_kyc_operator_role(env: Env, admin: Address, new_operator: Address) -> Result<(), Error> {
+    pub fn assign_kyc_operator_role(
+        env: Env,
+        admin: Address,
+        new_operator: Address,
+    ) -> Result<(), Error> {
         // Validate caller is admin using enhanced RBAC
-        rbac::require_admin_indirect_safe(&env, &admin)
-            .map_err(|_| Error::Unauthorized)?;
-        
+        rbac::require_admin_indirect_safe(&env, &admin).map_err(|_| Error::Unauthorized)?;
+
         // Use RBAC module for role assignment with mutual exclusion
         rbac::assign_kyc_operator_role(&env, &admin, &new_operator)
             .map_err(|_| Error::Unauthorized)?;
@@ -722,10 +745,13 @@ impl Governance {
     }
 
     /// Enhanced admin check for internal calls (Issue #179)
-    pub fn admin_internal_operation(env: Env, admin: Address, operation: Symbol) -> Result<(), Error> {
+    pub fn admin_internal_operation(
+        env: Env,
+        admin: Address,
+        operation: Symbol,
+    ) -> Result<(), Error> {
         // Use enhanced validation for internal calls
-        rbac::validate_internal_call(&env, &admin, &operation)
-            .map_err(|_| Error::Unauthorized)?;
+        rbac::validate_internal_call(&env, &admin, &operation).map_err(|_| Error::Unauthorized)?;
 
         Ok(())
     }
@@ -870,12 +896,12 @@ impl Governance {
             if !delegation.active {
                 return false;
             }
-            
+
             if let Some(expires_at) = delegation.expires_at {
                 let current_time = env.ledger().timestamp();
                 return current_time < expires_at;
             }
-            
+
             true
         } else {
             false
@@ -935,8 +961,7 @@ impl Governance {
         proposer.require_auth();
 
         // Verify timelock is enabled
-        let timelock_config = storage::get_timelock_config(&env)
-            .expect("Timelock not configured");
+        let timelock_config = storage::get_timelock_config(&env).expect("Timelock not configured");
 
         if !timelock_config.enabled {
             panic!("Timelock is not enabled");
@@ -991,8 +1016,8 @@ impl Governance {
     pub fn execute_queued_update(env: Env, executor: Address, entry_id: u64) {
         executor.require_auth();
 
-        let mut entry = storage::get_timelock_entry(&env, entry_id)
-            .expect("Timelock entry not found");
+        let mut entry =
+            storage::get_timelock_entry(&env, entry_id).expect("Timelock entry not found");
 
         if entry.executed {
             panic!("Timelock entry already executed");
@@ -1031,8 +1056,8 @@ impl Governance {
     pub fn cancel_queued_update(env: Env, canceller: Address, entry_id: u64) {
         canceller.require_auth();
 
-        let mut entry = storage::get_timelock_entry(&env, entry_id)
-            .expect("Timelock entry not found");
+        let mut entry =
+            storage::get_timelock_entry(&env, entry_id).expect("Timelock entry not found");
 
         if entry.executed {
             panic!("Cannot cancel executed timelock entry");
@@ -1102,11 +1127,14 @@ impl Governance {
     fn validate_parameter_value(env: &Env, value: String, rule: &types::ParameterRule) {
         match rule.param_type {
             ParameterType::Bool => {
-                if value != String::from_str(env, "true") && value != String::from_str(env, "false") && 
-                   value != String::from_str(env, "1") && value != String::from_str(env, "0") {
+                if value != String::from_str(env, "true")
+                    && value != String::from_str(env, "false")
+                    && value != String::from_str(env, "1")
+                    && value != String::from_str(env, "0")
+                {
                     panic!("Invalid boolean value");
                 }
-            },
+            }
             ParameterType::String | ParameterType::Symbol => {
                 if let Some(allowed) = &rule.allowed_values {
                     let mut found = false;
@@ -1120,38 +1148,39 @@ impl Governance {
                         panic!("Value not in allowed list");
                     }
                 }
-            },
-            _ => {
-                // Numeric validation skipped for now as it requires parsing String to number
             }
-        }
+           
     }
     /// Create storage snapshot for integrity validation
     fn create_storage_snapshot(env: &Env, target_contract: &Address, target_args: &Vec<Val>) {
         // Capture the current state of relevant storage keys before the parameter change
         // This ensures we can validate that only intended parameters change
-        
+
         if target_args.len() >= 2 {
             let storage_key = target_args.get(0).unwrap();
             let parameter_name = target_args.get(1).unwrap();
-            
+
             // Try to get current value from target contract
             let before_value = Self::try_get_storage_value(env, target_contract, &storage_key);
-            
+
             let snapshot = types::StorageSnapshot {
                 contract_address: target_contract.clone(),
                 storage_key: storage_key.to_xdr(&env),
                 before_value: before_value.map(|v| v.to_xdr(&env)),
-                after_value: None,  // Will be set after execution
+                after_value: None, // Will be set after execution
                 timestamp: env.ledger().timestamp(),
             };
-            
+
             storage::set_storage_snapshot(env, &snapshot);
         }
     }
 
     /// Attempt to read storage value from target contract (read-only)
-    fn try_get_storage_value(env: &Env, target_contract: &Address, storage_key: &Val) -> Option<Val> {
+    fn try_get_storage_value(
+        env: &Env,
+        target_contract: &Address,
+        storage_key: &Val,
+    ) -> Option<Val> {
         // In a real implementation, this would use a read-only contract call
         // to get the current storage value. For now, we return None as placeholder
         // This would be implemented using env.invoke_contract with a read function
@@ -1163,13 +1192,13 @@ impl Governance {
         if let Some(snapshot) = storage::get_storage_snapshot(env, target_contract, storage_key) {
             // Get current value after execution
             let after_value = Self::try_get_storage_value(env, target_contract, storage_key);
-            
+
             // Validate that only the intended storage key changed
             // In a more comprehensive implementation, we would:
             // 1. Check that only the target storage key changed
             // 2. Verify the change matches the expected parameter value
             // 3. Ensure no other storage keys were modified
-            
+
             // Update snapshot with after value
             let mut updated_snapshot = snapshot;
             updated_snapshot.after_value = after_value.map(|v| v.to_xdr(&env));
@@ -1197,7 +1226,7 @@ impl Governance {
 
         // Create pre-execution snapshot
         let before_value = Self::try_get_storage_value(&env, &target_contract, &storage_key);
-        
+
         let snapshot = types::StorageSnapshot {
             contract_address: target_contract.clone(),
             storage_key: storage_key.to_xdr(&env),
@@ -1213,7 +1242,8 @@ impl Governance {
         args.push_back(new_value.clone().into());
 
         // Execute the parameter change
-        let _result: Val = env.invoke_contract(&target_contract, &Symbol::new(&env, "set_parameter"), args);
+        let _result: Val =
+            env.invoke_contract(&target_contract, &Symbol::new(&env, "set_parameter"), args);
 
         // Validate post-execution integrity
         Self::validate_storage_integrity(&env, &target_contract, &storage_key);
@@ -1237,7 +1267,7 @@ impl Governance {
         let mut snapshots = Vec::new(&env);
         for i in 0..updates.len() {
             let (param_name, new_value, storage_key) = updates.get(i).unwrap();
-            
+
             // Validate each parameter
             let parameters = types::ProposalParameters {
                 name: param_name.clone(),
@@ -1246,18 +1276,25 @@ impl Governance {
             Self::validate_parameter_change(&env, &parameters);
 
             // Create snapshot
-            let before_value = Self::try_get_storage_value(&env, &env.current_contract_address(), &storage_key);
-            let snapshot = types::StorageSnapshot { contract_address: env.current_contract_address(), storage_key: storage_key.to_xdr(&env), before_value: before_value.map(|v| v.to_xdr(&env)), after_value: None, timestamp: env.ledger().timestamp() };
+            let before_value =
+                Self::try_get_storage_value(&env, &env.current_contract_address(), &storage_key);
+            let snapshot = types::StorageSnapshot {
+                contract_address: env.current_contract_address(),
+                storage_key: storage_key.to_xdr(&env),
+                before_value: before_value.map(|v| v.to_xdr(&env)),
+                after_value: None,
+                timestamp: env.ledger().timestamp(),
+            };
 
             snapshots.push_back(snapshot);
         }
 
         // Execute all updates atomically (in a real implementation)
         // For now, we execute them sequentially but validate integrity after each
-        
+
         for i in 0..updates.len() {
             let (param_name, new_value, storage_key) = updates.get(i).unwrap();
-            
+
             let mut args = Vec::new(&env);
             args.push_back(storage_key.clone());
             args.push_back(new_value.clone().into());
@@ -1280,24 +1317,34 @@ impl Governance {
     }
 
     /// Get storage snapshot for integrity verification
-    pub fn get_storage_snapshot(env: Env, contract_address: Address, storage_key: Val) -> Option<types::StorageSnapshot> {
+    pub fn get_storage_snapshot(
+        env: Env,
+        contract_address: Address,
+        storage_key: Val,
+    ) -> Option<types::StorageSnapshot> {
         storage::get_storage_snapshot(&env, &contract_address, &storage_key)
     }
 
     /// Verify parameter change integrity (admin only)
-    pub fn verify_parameter_integrity(env: Env, admin: Address, contract_address: Address, storage_key: Val) -> bool {
+    pub fn verify_parameter_integrity(
+        env: Env,
+        admin: Address,
+        contract_address: Address,
+        storage_key: Val,
+    ) -> bool {
         admin.require_auth();
         require_admin(&env, &admin);
 
-        if let Some(snapshot) = storage::get_storage_snapshot(&env, &contract_address, &storage_key) {
+        if let Some(snapshot) = storage::get_storage_snapshot(&env, &contract_address, &storage_key)
+        {
             // Get current value
             let current_value = Self::try_get_storage_value(&env, &contract_address, &storage_key);
-            
+
             // Verify that the after value matches current value
             match (snapshot.after_value, current_value) {
                 (Some(stored), Some(current)) => stored == current.to_xdr(&env),
                 (None, None) => true, // No change expected
-                _ => false, // Mismatch
+                _ => false,           // Mismatch
             }
         } else {
             false // No snapshot found
@@ -1377,7 +1424,8 @@ impl Governance {
         let config = storage::get_multisig_config(&env).expect("Multisig not configured");
         let current_time = env.ledger().timestamp();
 
-        let mut approval = if let Some(existing) = storage::get_multisig_approval(&env, proposal_id) {
+        let mut approval = if let Some(existing) = storage::get_multisig_approval(&env, proposal_id)
+        {
             // Check if already expired
             if current_time >= existing.expires_at {
                 panic!("Multisig approval has expired");
@@ -1414,7 +1462,12 @@ impl Governance {
 
         env.events().publish(
             (Symbol::new(&env, "ProposalExecutionApproved"),),
-            (proposal_id, signer, approval.approvers.len(), approval.required_approvals),
+            (
+                proposal_id,
+                signer,
+                approval.approvers.len(),
+                approval.required_approvals,
+            ),
         );
     }
 
@@ -1463,14 +1516,14 @@ impl Governance {
 
     /// Internal proposal execution logic
     fn execute_proposal_internal(env: &Env, executor: Address, proposal_id: u64) {
+        // ─── SNAPSHOT PHASE ───
         let mut proposal = get_proposal(env, proposal_id).expect("Proposal not found");
-
-        // Check thresholds
-        let total_votes = proposal.votes_for + proposal.votes_against + proposal.votes_abstain;
         let circulating_power = Self::get_circulating_voting_power(env.clone());
-
         let quorum_threshold = get_quorum_threshold(env);
         let approval_threshold = get_approval_threshold(env);
+
+        // ─── VALIDATION PHASE ───
+        let total_votes = proposal.votes_for + proposal.votes_against + proposal.votes_abstain;
 
         // Check quorum (30% of circulating voting power)
         let quorum_required = (circulating_power * quorum_threshold as u128) / 10000u128;
@@ -1485,6 +1538,8 @@ impl Governance {
                 panic!("Approval threshold not met");
             }
         }
+
+        // ─── MUTATION PHASE ───
 
         // Persist the execution state before calling out to the target contract
         proposal.status = ProposalStatus::Executed;
@@ -1512,7 +1567,9 @@ impl Governance {
 
                     let _result: Val = env.invoke_contract(&target, function, args);
                 } else {
-                    panic!("ParameterChange proposal missing target contract, function, or parameters");
+                    panic!(
+                        "ParameterChange proposal missing target contract, function, or parameters"
+                    );
                 }
             }
             ProposalType::ContractUpgrade => {
@@ -1579,7 +1636,10 @@ impl Governance {
     }
 
     /// Get multisig approval status for a proposal
-    pub fn get_multisig_approval_status(env: Env, proposal_id: u64) -> Option<types::MultisigApproval> {
+    pub fn get_multisig_approval_status(
+        env: Env,
+        proposal_id: u64,
+    ) -> Option<types::MultisigApproval> {
         storage::get_multisig_approval(&env, proposal_id)
     }
 

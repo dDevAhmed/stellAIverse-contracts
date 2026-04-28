@@ -4,11 +4,7 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, Env, Map,
     String, Symbol, Vec, U256,
 };
-use stellai_lib::{
-    admin, audit,
-    types::OracleData,
-    ADMIN_KEY,
-};
+use stellai_lib::{admin, audit, types::OracleData, ADMIN_KEY};
 
 // Contract errors
 #[contracterror]
@@ -105,9 +101,7 @@ impl RiskEvaluation {
             .set(&ORACLE_CONTRACT_KEY, &oracle_contract);
 
         // Initialize request counter
-        env.storage()
-            .instance()
-            .set(&REQUEST_COUNTER, &0u64);
+        env.storage().instance().set(&REQUEST_COUNTER, &0u64);
     }
 
     fn verify_admin(env: &Env, caller: &Address) -> Result<(), RiskEvalError> {
@@ -124,14 +118,15 @@ impl RiskEvaluation {
     fn check_rate_limit(env: &Env, caller: &Address) -> Result<(), RiskEvalError> {
         let now = env.ledger().timestamp();
         let rate_key = (RATE_LIMIT_PREFIX, caller.clone());
-        
-        let mut rate_entry: RateLimitEntry = env.storage()
-            .instance()
-            .get(&rate_key)
-            .unwrap_or(RateLimitEntry {
-                request_count: 0,
-                window_start: now,
-            });
+
+        let mut rate_entry: RateLimitEntry =
+            env.storage()
+                .instance()
+                .get(&rate_key)
+                .unwrap_or(RateLimitEntry {
+                    request_count: 0,
+                    window_start: now,
+                });
 
         // Reset window if expired
         if now - rate_entry.window_start >= RATE_LIMIT_WINDOW {
@@ -146,9 +141,7 @@ impl RiskEvaluation {
 
         // Increment counter
         rate_entry.request_count += 1;
-        env.storage()
-            .instance()
-            .set(&rate_key, &rate_entry);
+        env.storage().instance().set(&rate_key, &rate_entry);
 
         Ok(())
     }
@@ -156,7 +149,7 @@ impl RiskEvaluation {
     fn get_cached_data(env: &Env, key: &Symbol) -> Option<CacheEntry> {
         let cache_key = (CACHE_PREFIX, key.clone());
         let entry: Option<CacheEntry> = env.storage().instance().get(&cache_key);
-        
+
         if let Some(entry) = entry {
             let now = env.ledger().timestamp();
             if now < entry.expiry {
@@ -199,7 +192,7 @@ impl RiskEvaluation {
     ) -> Result<Vec<i128>, RiskEvalError> {
         // Check authorization and rate limits
         Self::check_rate_limit(&env, &caller)?;
-        
+
         if data_keys.len() > MAX_BATCH_SIZE {
             return Err(RiskEvalError::BatchSizeExceeded);
         }
@@ -285,7 +278,7 @@ impl RiskEvaluation {
         for (i, value) in data_values.iter().enumerate() {
             if i < risk_factors.len() {
                 let factor = risk_factors.get(i).unwrap();
-                
+
                 // Different risk factors contribute differently to the score
                 let contribution = match factor.to_string().as_str() {
                     "credit_score" => {
@@ -295,12 +288,24 @@ impl RiskEvaluation {
                     }
                     "transaction_volume" => {
                         // Higher volume = slightly higher risk
-                        if *value > 1000000 { 20 } else if *value > 100000 { 10 } else { 5 }
+                        if *value > 1000000 {
+                            20
+                        } else if *value > 100000 {
+                            10
+                        } else {
+                            5
+                        }
                     }
                     "account_age" => {
                         // Older account = lower risk
                         let age_days = (*value / 86400) as u32; // Convert seconds to days
-                        if age_days > 365 { 0 } else if age_days > 30 { 10 } else { 25 }
+                        if age_days > 365 {
+                            0
+                        } else if age_days > 30 {
+                            10
+                        } else {
+                            25
+                        }
                     }
                     "compliance_score" => {
                         // Lower compliance = higher risk
@@ -337,11 +342,11 @@ impl RiskEvaluation {
 
         let now = env.ledger().timestamp();
         let prefix = Bytes::from_slice(&env, b"CACHE");
-        
+
         // In a real implementation, we would iterate through cache entries
         // and remove expired ones. For Soroban, we need a different approach
         // since we can't easily iterate through all storage keys.
-        
+
         // This is a placeholder for the cache cleanup logic
         audit::create_audit_log(
             &env,
@@ -353,12 +358,16 @@ impl RiskEvaluation {
         Ok(())
     }
 
-    pub fn update_cache_ttl(env: Env, admin: Address, new_ttl_seconds: u64) -> Result<(), RiskEvalError> {
+    pub fn update_cache_ttl(
+        env: Env,
+        admin: Address,
+        new_ttl_seconds: u64,
+    ) -> Result<(), RiskEvalError> {
         Self::verify_admin(&env, &admin)?;
 
         // In a real implementation, we would update the TTL constant
         // For now, we'll just log the change
-        
+
         audit::create_audit_log(
             &env,
             admin.clone(),

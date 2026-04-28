@@ -3,7 +3,7 @@
 /// All role checks read directly from on-chain storage on every call.
 /// No caller context is implicitly trusted; every internal or indirect
 /// call path must go through one of these functions.
-/// 
+///
 /// Issue #179: Prevent Role Escalation via Indirect Function Calls
 /// Issue #178: Implement Role Separation Between Governance and KYC Operators
 use soroban_sdk::{contracttype, Address, Env, Symbol, Vec};
@@ -157,9 +157,13 @@ pub fn validate_internal_call(
     // Log the access attempt for audit trail
     env.events().publish(
         (Symbol::new(env, "access_check"),),
-        (caller.clone(), function_name.clone(), env.ledger().timestamp()),
+        (
+            caller.clone(),
+            function_name.clone(),
+            env.ledger().timestamp(),
+        ),
     );
-    
+
     // Always revalidate caller role from storage
     require_admin_indirect_safe(env, caller)
 }
@@ -254,10 +258,10 @@ pub fn assign_governance_role(
 ) -> Result<(), ContractError> {
     // Validate admin
     require_admin(env, admin)?;
-    
+
     // Remove from KYC operators if present
     remove_from_kyc_operators(env, new_governance)?;
-    
+
     // Add to governance roles
     let mut governance_roles: Vec<Address> = env
         .storage()
@@ -283,10 +287,10 @@ pub fn assign_kyc_operator_role(
 ) -> Result<(), ContractError> {
     // Validate admin
     require_admin(env, admin)?;
-    
+
     // Remove from governance if present
     remove_from_governance(env, new_operator)?;
-    
+
     // Add to KYC operators
     let mut kyc_operators: Vec<Address> = env
         .storage()
@@ -376,7 +380,7 @@ pub fn remove_kyc_operator_role(
 ) -> Result<(), ContractError> {
     // Validate admin
     require_admin(env, admin)?;
-    
+
     // Remove from KYC operators
     remove_from_kyc_operators(env, operator)?;
 
@@ -685,11 +689,11 @@ mod tests {
             env.storage()
                 .instance()
                 .set(&Symbol::new(&env, ADMIN_KEY), &admin);
-            
+
             // First assign governance role
             assert!(assign_governance_role(&env, &admin, &user).is_ok());
             assert!(has_governance_role(&env, &user).unwrap());
-            
+
             // Then assign KYC operator - should remove governance role
             assert!(assign_kyc_operator_role(&env, &admin, &user).is_ok());
             assert!(has_kyc_operator_role(&env, &user).unwrap());
@@ -706,11 +710,11 @@ mod tests {
             env.storage()
                 .instance()
                 .set(&Symbol::new(&env, ADMIN_KEY), &admin);
-            
+
             // First assign KYC operator role
             assert!(assign_kyc_operator_role(&env, &admin, &user).is_ok());
             assert!(has_kyc_operator_role(&env, &user).unwrap());
-            
+
             // Then assign governance - should remove KYC operator role
             assert!(assign_governance_role(&env, &admin, &user).is_ok());
             assert!(has_governance_role(&env, &user).unwrap());
@@ -727,10 +731,10 @@ mod tests {
             env.storage()
                 .instance()
                 .set(&Symbol::new(&env, ADMIN_KEY), &admin);
-            
+
             // Assign KYC operator role
             assert!(assign_kyc_operator_role(&env, &admin, &kyc_op).is_ok());
-            
+
             // Try to use governance functions - should fail
             let err = require_governance_role(&env, &kyc_op).unwrap_err();
             assert_eq!(err, ContractError::RoleConflict);
@@ -746,10 +750,10 @@ mod tests {
             env.storage()
                 .instance()
                 .set(&Symbol::new(&env, ADMIN_KEY), &admin);
-            
+
             // Assign governance role
             assert!(assign_governance_role(&env, &admin, &governance).is_ok());
-            
+
             // Try to use KYC functions - should fail
             let err = require_kyc_operator_role(&env, &governance).unwrap_err();
             assert_eq!(err, ContractError::RoleConflict);
@@ -766,11 +770,11 @@ mod tests {
             env.storage()
                 .instance()
                 .set(&Symbol::new(&env, ADMIN_KEY), &admin);
-            
+
             // Attacker tries to assign roles - should fail
             let err = assign_governance_role(&env, &attacker, &user).unwrap_err();
             assert_eq!(err, ContractError::RoleEscalationAttempt);
-            
+
             let err = assign_kyc_operator_role(&env, &attacker, &user).unwrap_err();
             assert_eq!(err, ContractError::RoleEscalationAttempt);
         });
@@ -785,24 +789,24 @@ mod tests {
             env.storage()
                 .instance()
                 .set(&Symbol::new(&env, ADMIN_KEY), &admin);
-            
+
             // Manually try to set both roles (bypass assignment functions)
             let mut governance_roles: Vec<Address> = Vec::new(&env);
             governance_roles.push_back(user.clone());
             env.storage()
                 .instance()
                 .set(&Symbol::new(&env, GOVERNANCE_ROLE_KEY), &governance_roles);
-            
+
             let mut kyc_operators: Vec<Address> = Vec::new(&env);
             kyc_operators.push_back(user.clone());
             env.storage()
                 .instance()
                 .set(&Symbol::new(&env, KYC_OPERATOR_ROLE_KEY), &kyc_operators);
-            
+
             // Both role checks should fail due to conflict
             let err = require_governance_role(&env, &user).unwrap_err();
             assert_eq!(err, ContractError::RoleConflict);
-            
+
             let err = require_kyc_operator_role(&env, &user).unwrap_err();
             assert_eq!(err, ContractError::RoleConflict);
         });

@@ -87,7 +87,11 @@ mod tests {
         CreditScoreNFT::init_contract(env.clone(), admin.clone()).unwrap();
 
         // Add verification authority
-        let result = CreditScoreNFT::add_verification_authority(env.clone(), admin.clone(), authority.clone());
+        let result = CreditScoreNFT::add_verification_authority(
+            env.clone(),
+            admin.clone(),
+            authority.clone(),
+        );
         assert!(result.is_ok());
 
         // Test adding duplicate fails
@@ -117,7 +121,8 @@ mod tests {
         let request = create_test_mint_request(&env, owner.clone());
 
         // Mint NFT
-        let result = CreditScoreNFT::mint_credit_score_nft(env.clone(), minter.clone(), request.clone());
+        let result =
+            CreditScoreNFT::mint_credit_score_nft(env.clone(), minter.clone(), request.clone());
         assert!(result.is_ok());
         let token_id = result.unwrap();
         assert_eq!(token_id, 1);
@@ -187,7 +192,12 @@ mod tests {
 
         // Verify NFT
         let verification_hash = BytesN::from_array(&env, &[2u8; 32]);
-        let result = CreditScoreNFT::verify_credit_score(env.clone(), verifier.clone(), token_id, verification_hash);
+        let result = CreditScoreNFT::verify_credit_score(
+            env.clone(),
+            verifier.clone(),
+            token_id,
+            verification_hash,
+        );
         assert!(result.is_ok());
 
         // Check verification status
@@ -223,7 +233,13 @@ mod tests {
         // Update credit score
         let new_score = 780;
         let new_expires_at = env.ledger().timestamp() + 365 * 24 * 60 * 60;
-        let result = CreditScoreNFT::update_credit_score(env.clone(), verifier.clone(), token_id, new_score, new_expires_at);
+        let result = CreditScoreNFT::update_credit_score(
+            env.clone(),
+            verifier.clone(),
+            token_id,
+            new_score,
+            new_expires_at,
+        );
         assert!(result.is_ok());
 
         // Verify updated score
@@ -251,7 +267,8 @@ mod tests {
         let token_id = CreditScoreNFT::mint_credit_score_nft(env.clone(), minter, request).unwrap();
 
         // Transfer NFT
-        let result = CreditScoreNFT::transfer_nft(env.clone(), owner.clone(), new_owner.clone(), token_id);
+        let result =
+            CreditScoreNFT::transfer_nft(env.clone(), owner.clone(), new_owner.clone(), token_id);
         assert!(result.is_ok());
 
         // Verify new ownership
@@ -279,10 +296,12 @@ mod tests {
 
         // Mint NFTs for different owners
         let request1 = create_test_mint_request(&env, owner1.clone());
-        let token1 = CreditScoreNFT::mint_credit_score_nft(env.clone(), minter.clone(), request1).unwrap();
+        let token1 =
+            CreditScoreNFT::mint_credit_score_nft(env.clone(), minter.clone(), request1).unwrap();
 
         let request2 = create_test_mint_request(&env, owner2.clone());
-        let token2 = CreditScoreNFT::mint_credit_score_nft(env.clone(), minter.clone(), request2).unwrap();
+        let token2 =
+            CreditScoreNFT::mint_credit_score_nft(env.clone(), minter.clone(), request2).unwrap();
 
         let request3 = create_test_mint_request(&env, owner1.clone());
         let token3 = CreditScoreNFT::mint_credit_score_nft(env.clone(), minter, request3).unwrap();
@@ -336,7 +355,10 @@ mod tests {
 
         let metadata = CreditScoreMetadata {
             name: String::from_str(&env, "Premium Credit Score NFT"),
-            description: String::from_str(&env, "A verified credit score NFT with comprehensive metadata"),
+            description: String::from_str(
+                &env,
+                "A verified credit score NFT with comprehensive metadata",
+            ),
             image: String::from_str(&env, "https://ipfs.io/ipfs/QmHash123"),
             external_url: String::from_str(&env, "https://stellai.com/token/1"),
             attributes,
@@ -397,8 +419,10 @@ mod tests {
             let mut request = create_test_mint_request(&env, owner.clone());
             request.score_type = score_type.clone();
 
-            let token_id = CreditScoreNFT::mint_credit_score_nft(env.clone(), minter.clone(), request.clone()).unwrap();
-            
+            let token_id =
+                CreditScoreNFT::mint_credit_score_nft(env.clone(), minter.clone(), request.clone())
+                    .unwrap();
+
             let nft = CreditScoreNFT::get_nft(env.clone(), token_id).unwrap();
             assert_eq!(nft.score_type, *score_type);
         }

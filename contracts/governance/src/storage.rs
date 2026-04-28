@@ -1,9 +1,11 @@
-
-use soroban_sdk::{contracttype, Address, Env, String, Val, Vec, Bytes};
 use soroban_sdk::xdr::ToXdr;
+use soroban_sdk::{contracttype, Address, Bytes, Env, String, Val, Vec};
 
-
-use crate::types::{Delegation, DelegationSnapshot, MultisigApproval, MultisigConfig, ParameterRule, Proposal, StorageSnapshot, TimelockConfig, TimelockEntry, Vote, VoteEscrow, VotingMechanism, WaitlistProposal};
+use crate::types::{
+    Delegation, DelegationSnapshot, MultisigApproval, MultisigConfig, ParameterRule, Proposal,
+    StorageSnapshot, TimelockConfig, TimelockEntry, Vote, VoteEscrow, VotingMechanism,
+    WaitlistProposal,
+};
 
 #[contracttype]
 #[derive(Clone)]
@@ -235,7 +237,7 @@ pub fn get_voting_mechanism(env: &Env) -> VotingMechanism {
 
 pub(crate) fn add_delegator_to_list(env: &Env, delegatee: &Address, delegator: &Address) {
     let mut delegators = get_delegators_to(env, delegatee);
-    
+
     // Use contains() for more efficient lookup instead of manual iteration
     if !delegators.contains(delegator) {
         delegators.push_back(delegator.clone());
@@ -247,7 +249,7 @@ pub(crate) fn add_delegator_to_list(env: &Env, delegatee: &Address, delegator: &
 
 pub(crate) fn remove_delegator_from_list(env: &Env, delegatee: &Address, delegator: &Address) {
     let delegators = get_delegators_to(env, delegatee);
-    
+
     // Only proceed if delegator is actually in the list
     if delegators.contains(delegator) {
         let mut new_delegators = Vec::new(env);
@@ -257,7 +259,7 @@ pub(crate) fn remove_delegator_from_list(env: &Env, delegatee: &Address, delegat
                 new_delegators.push_back(addr);
             }
         }
-        
+
         if new_delegators.len() > 0 {
             env.storage()
                 .instance()
@@ -374,9 +376,7 @@ pub fn set_multisig_config(env: &Env, config: &MultisigConfig) {
 }
 
 pub fn get_multisig_config(env: &Env) -> Option<MultisigConfig> {
-    env.storage()
-        .instance()
-        .get(&DataKey::MultisigConfig)
+    env.storage().instance().get(&DataKey::MultisigConfig)
 }
 
 pub fn set_multisig_approval(env: &Env, proposal_id: u64, approval: &MultisigApproval) {
@@ -403,7 +403,7 @@ pub fn is_authorized_signer(env: &Env, signer: &Address) -> bool {
         if !config.enabled {
             return false;
         }
-        
+
         for i in 0..config.authorized_signers.len() {
             if config.authorized_signers.get(i).unwrap() == *signer {
                 return true;
@@ -427,9 +427,7 @@ pub fn set_timelock_config(env: &Env, config: &TimelockConfig) {
 }
 
 pub fn get_timelock_config(env: &Env) -> Option<TimelockConfig> {
-    env.storage()
-        .instance()
-        .get(&DataKey::TimelockConfig)
+    env.storage().instance().get(&DataKey::TimelockConfig)
 }
 
 pub fn get_timelock_counter(env: &Env) -> u64 {
@@ -488,19 +486,29 @@ pub fn remove_parameter_rule(env: &Env, parameter_name: String) {
 /* ---------------- STORAGE SNAPSHOTS ---------------- */
 
 pub fn set_storage_snapshot(env: &Env, snapshot: &StorageSnapshot) {
-    env.storage()
-        .instance()
-        .set(&DataKey::StorageSnapshot(snapshot.contract_address.clone(), snapshot.storage_key.clone()), snapshot);
+    env.storage().instance().set(
+        &DataKey::StorageSnapshot(
+            snapshot.contract_address.clone(),
+            snapshot.storage_key.clone(),
+        ),
+        snapshot,
+    );
 }
 
-pub fn get_storage_snapshot(env: &Env, contract_address: &Address, storage_key: &Val) -> Option<StorageSnapshot> {
-    env.storage()
-        .instance()
-        .get(&DataKey::StorageSnapshot(contract_address.clone(), storage_key.to_xdr(env)))
+pub fn get_storage_snapshot(
+    env: &Env,
+    contract_address: &Address,
+    storage_key: &Val,
+) -> Option<StorageSnapshot> {
+    env.storage().instance().get(&DataKey::StorageSnapshot(
+        contract_address.clone(),
+        storage_key.to_xdr(env),
+    ))
 }
 
 pub fn remove_storage_snapshot(env: &Env, contract_address: &Address, storage_key: &Val) {
-    env.storage()
-        .instance()
-        .remove(&DataKey::StorageSnapshot(contract_address.clone(), storage_key.to_xdr(env)));
+    env.storage().instance().remove(&DataKey::StorageSnapshot(
+        contract_address.clone(),
+        storage_key.to_xdr(env),
+    ));
 }

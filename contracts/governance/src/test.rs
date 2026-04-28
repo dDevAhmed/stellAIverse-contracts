@@ -1,9 +1,14 @@
 #![cfg(test)]
 extern crate std;
 extern crate alloc;
+extern crate std;
 
 use super::*;
-use soroban_sdk::{contract, contractimpl, contracttype, vec, testutils::{Address as _, Ledger, LedgerInfo}, token, Address, Env, String, Symbol, Val, Vec};
+use soroban_sdk::{
+    contract, contractimpl, contracttype,
+    testutils::{Address as _, Ledger, LedgerInfo},
+    token, vec, Address, Env, String, Symbol, Val, Vec,
+};
 
 // Mock token contract for testing with mint functionality
 #[contract]
@@ -971,8 +976,7 @@ fn test_timelock_initialization() {
     let (gov_client, admin, _, _) = setup_governance(&e);
 
     gov_client.init_timelock(
-        &admin,
-        &3600,  // 1 hour min delay
+        &admin, &3600,  // 1 hour min delay
         &86400, // 24 hours max delay
         &7200,  // 2 hours default delay
     );
@@ -992,10 +996,8 @@ fn test_timelock_invalid_min_delay() {
     let (gov_client, admin, _, _) = setup_governance(&e);
 
     gov_client.init_timelock(
-        &admin,
-        &0,     // Invalid min delay
-        &86400,
-        &7200,
+        &admin, &0, // Invalid min delay
+        &86400, &7200,
     );
 }
 
@@ -1007,9 +1009,7 @@ fn test_timelock_invalid_max_delay() {
     let (gov_client, admin, _, _) = setup_governance(&e);
 
     gov_client.init_timelock(
-        &admin,
-        &3600,
-        &1800,  // Max delay less than min
+        &admin, &3600, &1800, // Max delay less than min
         &7200,
     );
 }
@@ -1086,7 +1086,7 @@ fn test_queue_parameter_update() {
         &proposal_id,
         &target_contract ,
         &Symbol::new(&e, "update_parameter"),
-         &args,
+        &args,
         &None::<u64>, // Use default delay
     );
 
@@ -1172,7 +1172,7 @@ fn test_execute_before_delay() {
         &proposal_id,
         &target_contract ,
         &Symbol::new(&e, "update_parameter"),
-         &args,
+        &args,
         &Some(120), // 2 minutes delay
     );
 
@@ -1252,7 +1252,7 @@ fn test_execute_after_delay() {
         &proposal_id,
         &target_contract ,
         &Symbol::new(&e, "update_parameter"),
-         &args,
+        &args,
         &Some(60), // 1 minute delay
     );
 
@@ -1346,7 +1346,7 @@ fn test_cancel_queued_update() {
         &proposal_id,
         &target_contract ,
         &Symbol::new(&e, "update_parameter"),
-         &args,
+        &args,
         &Some(3600),
     );
 
@@ -1380,7 +1380,9 @@ fn test_parameter_rule_validation() {
 
     gov_client.set_parameter_rule(&admin, &rule);
 
-    let retrieved_rule = gov_client.get_parameter_rule(&String::from_str(&e, "fee_rate")).unwrap();
+    let retrieved_rule = gov_client
+        .get_parameter_rule(&String::from_str(&e, "fee_rate"))
+        .unwrap();
     assert_eq!(retrieved_rule.name, String::from_str(&e, "fee_rate"));
     assert_eq!(retrieved_rule.param_type, ParameterType::U64);
     assert!(retrieved_rule.requires_timelock);
@@ -1411,16 +1413,19 @@ fn test_safe_parameter_change() {
 
     gov_client.execute_parameter_change_safe(
         &executor,
-        &target_contract ,
+        &target_contract,
         &String::from_str(&e, "max_withdrawal"),
         &String::from_str(&e, "5000"),
         &storage_key,
     );
 
     // Verify storage snapshot was created
-    let snapshot = gov_client.get_storage_snapshot(&target_contract , &storage_key).unwrap();
+    let snapshot = gov_client
+        .get_storage_snapshot(&target_contract, &storage_key)
+        .unwrap();
     assert_eq!(snapshot.contract_address, target_contract.clone());
-    assert!(!snapshot.before_value.is_some() || !snapshot.after_value.is_some()); // At least one should be set
+    assert!(!snapshot.before_value.is_some() || !snapshot.after_value.is_some());
+    // At least one should be set
 }
 
 #[test]
@@ -1443,7 +1448,8 @@ fn test_batch_parameter_updates() {
         name: String::from_str(&e, "param2"),
         min_value: None,
         max_value: None,
-        allowed_values: Some(vec![&e, 
+        allowed_values: Some(vec![
+            &e,
             String::from_str(&e, "enabled"),
             String::from_str(&e, "disabled"),
         ]),
@@ -1510,7 +1516,7 @@ fn test_parameter_validation_min_violation() {
 
     gov_client.execute_parameter_change_safe(
         &executor,
-        &target_contract ,
+        &target_contract,
         &String::from_str(&e, "min_balance"),
         &String::from_str(&e, "500"), // Below minimum of 1000
         &storage_key,
@@ -1529,7 +1535,8 @@ fn test_parameter_validation_enum_violation() {
         name: String::from_str(&e, "status"),
         min_value: None,
         max_value: None,
-        allowed_values: Some(vec![&e, 
+        allowed_values: Some(vec![
+            &e,
             String::from_str(&e, "active"),
             String::from_str(&e, "inactive"),
         ]),
@@ -1546,7 +1553,7 @@ fn test_parameter_validation_enum_violation() {
 
     gov_client.execute_parameter_change_safe(
         &executor,
-        &target_contract ,
+        &target_contract,
         &String::from_str(&e, "status"),
         &String::from_str(&e, "pending"), // Not in allowed list
         &storage_key,
@@ -1579,7 +1586,7 @@ fn test_parameter_requires_timelock() {
 
     gov_client.execute_parameter_change_safe(
         &executor,
-        &target_contract ,
+        &target_contract,
         &String::from_str(&e, "critical_param"),
         &String::from_str(&e, "new_value"),
         &storage_key,
@@ -1611,19 +1618,16 @@ fn test_verify_parameter_integrity() {
 
     gov_client.execute_parameter_change_safe(
         &executor,
-        &target_contract ,
+        &target_contract,
         &String::from_str(&e, "test_param"),
         &String::from_str(&e, "test_value"),
         &storage_key,
     );
 
     // Verify integrity (should return true in test environment)
-    let integrity_ok = gov_client.verify_parameter_integrity(
-        &admin,
-        &target_contract ,
-        &storage_key,
-    );
-    
+    let integrity_ok =
+        gov_client.verify_parameter_integrity(&admin, &target_contract, &storage_key);
+
     // In test environment, this may return false due to mock implementation
     // but the function should execute without panicking
     assert!(integrity_ok == true || integrity_ok == false);
@@ -1716,7 +1720,7 @@ fn test_timelock_with_parameter_validation() {
         &proposal_id,
         &target_contract ,
         &Symbol::new(&e, "update_parameter"),
-         &args,
+        &args,
         &Some(60),
     );
 
@@ -2051,6 +2055,12 @@ fn test_multisig_approval_tracking() {
     e.ledger().with_mut(|li| li.timestamp += 7 * 24 * 60 * 60 + 1);
     gov_client.update_proposal_status(&proposal_id);
 
+    // Pass the proposal
+    gov_client.cast_vote(&admin, &proposal_id, &VoteType::For);
+    e.ledger()
+        .with_mut(|li| li.timestamp += 7 * 24 * 60 * 60 + 1);
+    gov_client.update_proposal_status(&proposal_id);
+
     // Signer1 approves
     gov_client.approve_proposal_execution(&signer1, &proposal_id);
 
@@ -2088,14 +2098,15 @@ fn test_execute_fails_if_multisig_threshold_not_met() {
             name: String::from_str(&e, "param"),
             value: String::from_str(&e, "value"),
         }),
-        &Some(target_contract), 
-        &Some(Symbol::new(&e, "update_parameter")), 
+        &Some(target_contract),
+        &Some(Symbol::new(&e, "update_parameter")),
         &None,
     );
     gov_client.cast_vote(&admin, &proposal_id, &VoteType::For);
-    
+
     // Move time forward to end voting
-    e.ledger().with_mut(|li| li.timestamp += 7 * 24 * 60 * 60 + 1);
+    e.ledger()
+        .with_mut(|li| li.timestamp += 7 * 24 * 60 * 60 + 1);
     gov_client.update_proposal_status(&proposal_id);
 
     // Only 1 approval (threshold is 2)
@@ -2134,13 +2145,14 @@ fn test_execute_succeeds_with_proper_multisig() {
             name: String::from_str(&e, "param"),
             value: String::from_str(&e, "value"),
         }),
-        &Some(target_contract), 
-        &Some(Symbol::new(&e, "update_parameter")), 
+        &Some(target_contract),
+        &Some(Symbol::new(&e, "update_parameter")),
         &None,
     );
     gov_client.cast_vote(&admin, &proposal_id, &VoteType::For);
-    
-    e.ledger().with_mut(|li| li.timestamp += 7 * 24 * 60 * 60 + 1);
+
+    e.ledger()
+        .with_mut(|li| li.timestamp += 7 * 24 * 60 * 60 + 1);
     gov_client.update_proposal_status(&proposal_id);
 
     // Both approve
@@ -2149,7 +2161,7 @@ fn test_execute_succeeds_with_proper_multisig() {
 
     // Attempt execution - should succeed
     gov_client.execute_proposal(&admin, &proposal_id);
-    
+
     let proposal = gov_client.get_proposal(&proposal_id).unwrap();
     assert_eq!(proposal.status, ProposalStatus::Executed);
 }
@@ -2182,13 +2194,14 @@ fn test_prevent_duplicate_signatures() {
             name: String::from_str(&e, "param"),
             value: String::from_str(&e, "value"),
         }),
-        &Some(target_contract), 
-        &Some(Symbol::new(&e, "update_parameter")), 
+        &Some(target_contract),
+        &Some(Symbol::new(&e, "update_parameter")),
         &None,
     );
-    
+
     gov_client.cast_vote(&admin, &proposal_id, &VoteType::For);
-    e.ledger().with_mut(|li| li.timestamp += 7 * 24 * 60 * 60 + 1);
+    e.ledger()
+        .with_mut(|li| li.timestamp += 7 * 24 * 60 * 60 + 1);
     gov_client.update_proposal_status(&proposal_id);
 
     gov_client.approve_proposal_execution(&signer1, &proposal_id);
