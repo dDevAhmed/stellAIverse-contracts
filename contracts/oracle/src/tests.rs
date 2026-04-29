@@ -178,6 +178,8 @@ fn test_relay_signed_rejects_bad_signature() {
 #[test]
 #[should_panic(expected = "Invalid nonce: replay protection triggered")]
 fn test_relay_signed_prevents_replay() {
+    // This test simulates a replay attack by submitting the same signed request twice.
+    // The second call must panic due to nonce reuse, confirming replay protection works.
     let (env, oracle, admin, pk, sk, receiver_id) = setup();
     oracle.register_oracle_key(&admin, &pk);
 
@@ -206,6 +208,7 @@ fn test_relay_signed_prevents_replay() {
         &deadline,
         &signature,
     );
+    // The following call should panic, as the nonce has already been used
     oracle.relay_signed(
         &pk,
         &receiver_id,

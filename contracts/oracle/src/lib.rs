@@ -246,6 +246,8 @@ impl Oracle {
         deadline: u64,
         signature: BytesN<64>,
     ) -> Val {
+        // --- REPLAY PROTECTION: Ensure each signed request uses a unique, increasing nonce ---
+        // This prevents replay attacks by rejecting any duplicate or stale nonce values.
         if !Self::is_approved_oracle_key(&env, &oracle_pubkey) {
             panic!("Oracle not approved");
         }
@@ -273,6 +275,7 @@ impl Oracle {
         env.crypto()
             .ed25519_verify(&oracle_pubkey, &message, &signature);
 
+        // Store the new nonce to prevent future replays
         Self::set_oracle_nonce(&env, &oracle_pubkey, nonce);
 
         let result: Val = env.invoke_contract(&target_contract, &function, args);
