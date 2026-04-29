@@ -40,6 +40,9 @@ On-chain rules engine for managing agent execution policies.
 ### Marketplace (`marketplace`)
 Platform for trading and leasing agents with royalty support.
 
+shared/
+└── src/lib.rs         # Common types and utilities shared across contracts
+
 **Key Functions:**
 - `create_listing()` - List an agent for sale, lease, or auction
 - `buy_agent()` - Purchase or lease an agent

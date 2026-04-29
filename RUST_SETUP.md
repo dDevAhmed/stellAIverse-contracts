@@ -69,3 +69,6 @@ You should see `wasm32-unknown-unknown` in the installed targets list.
 - **If commands still don't work after restart**: Make sure you completely closed and reopened Cursor (not just the terminal)
 - **If PATH is set but commands fail**: Run `. .\setup-rust-path.ps1` in your current terminal session
 - **To check if Rust is installed**: Verify `C:\Users\Godsmiracle\.cargo\bin\rustup.exe` exists
+
+
+
