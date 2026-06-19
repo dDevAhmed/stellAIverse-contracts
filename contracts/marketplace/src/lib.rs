@@ -7,6 +7,8 @@ mod payments;
 mod prop_tests;
 mod storage;
 #[cfg(test)]
+mod test_bid_history;
+#[cfg(test)]
 mod test_dynamic_fee_enhancement;
 
 use soroban_sdk::{
@@ -21,8 +23,8 @@ use stellai_lib::{
     storage_keys::LISTING_COUNTER_KEY,
     types::{
         Approval, ApprovalConfig, ApprovalHistory, ApprovalStatus, Auction, AuctionStatus,
-        AuctionType, LeaseData, LeaseExtensionRequest, LeaseHistoryEntry, LeaseState, Listing,
-        ListingType, RoyaltyInfo,
+        AuctionType, BidRecord, LeaseData, LeaseExtensionRequest, LeaseHistoryEntry, LeaseState,
+        Listing, ListingType, RoyaltyInfo,
     },
     validation,
 };
@@ -1044,6 +1046,10 @@ impl Marketplace {
         // Lock new bid in contract
         token_client.transfer(&bidder, &env.current_contract_address(), &amount);
 
+        // Capture previous bid before overwriting for increment calculation
+        let prev_highest = auction.highest_bid;
+        let bid_increment = amount - prev_highest;
+
         auction.highest_bidder = Some(bidder.clone());
         auction.highest_bid = amount;
 
@@ -1054,6 +1060,20 @@ impl Marketplace {
         }
 
         set_auction(&env, &auction);
+
+        // Record bid in history with sequence and increment
+        let sequence = get_bid_history_count(&env, auction_id) + 1;
+        add_bid_history(
+            &env,
+            auction_id,
+            &BidRecord {
+                bidder: bidder.clone(),
+                amount,
+                timestamp: env.ledger().timestamp(),
+                bid_increment,
+                sequence,
+            },
+        );
 
         env.events().publish(
             (Symbol::new(&env, "BidPlaced"),),
@@ -1075,6 +1095,28 @@ impl Marketplace {
             tx_hash,
             description,
         );
+    }
+
+    /// Returns the number of bids placed in an auction.
+    pub fn get_bid_count(env: Env, auction_id: u64) -> u64 {
+        get_bid_history_count(&env, auction_id)
+    }
+
+    /// Returns the full bid history for an auction ordered by sequence.
+    pub fn get_bid_history(env: Env, auction_id: u64) -> Vec<BidRecord> {
+        let count = get_bid_history_count(&env, auction_id);
+        let mut history = Vec::new(&env);
+        for i in 0..count {
+            if let Some(entry) = get_bid_history_entry(&env, auction_id, i) {
+                history.push_back(entry);
+            }
+        }
+        history
+    }
+
+    /// Returns a single bid history entry by its 0-based index.
+    pub fn get_bid_history_entry_at(env: Env, auction_id: u64, index: u64) -> Option<BidRecord> {
+        get_bid_history_entry(&env, auction_id, index)
     }
 
     /// Create a sealed-bid auction with explicit commit/reveal durations

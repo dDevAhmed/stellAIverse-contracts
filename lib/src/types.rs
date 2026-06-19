@@ -244,6 +244,10 @@ pub struct BidRecord {
     pub bidder: Address,
     pub amount: i128,
     pub timestamp: u64,
+    /// Amount above the previous highest bid (0 for the first bid).
+    pub bid_increment: i128,
+    /// 1-based position of this bid in the auction sequence.
+    pub sequence: u64,
 }
 
 /// Multi-signature approval configuration for high-value sales
