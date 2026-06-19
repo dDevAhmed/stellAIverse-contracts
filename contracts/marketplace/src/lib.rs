@@ -1,8 +1,6 @@
 #![no_std]
+pub mod types;
 
-mod atomic;
-mod payment_types;
-mod payments;
 #[cfg(test)]
 mod prop_tests;
 mod storage;
@@ -30,45 +28,20 @@ use stellai_lib::{
 use storage::{Escrow, EscrowConfig, EscrowStatus, *};
 
 #[contract]
-pub struct Marketplace;
+pub struct MarketplaceContract;
+
+const DATA_EXPIRATION_WINDOW_SECONDS: u64 = 3600; 
+const BPS_DENOMINATOR: u128 = 10_000;
 
 #[contractimpl]
-impl Marketplace {
-    /// Initialize contract with admin
-    pub fn init_contract(env: Env, admin: Address) {
-        if env.storage().instance().has(&DataKey::Admin) {
-            panic!("Contract already initialized");
-        }
-
+impl MarketplaceContract {
+    
+    pub fn authorize_oracle(env: Env, admin: Address, oracle: Address) {
         admin.require_auth();
-        set_admin(&env, &admin);
-
-        env.storage()
-            .instance()
-            .set(&Symbol::new(&env, LISTING_COUNTER_KEY), &0u64);
-        storage::set_platform_fee(&env, 250);
+        env.storage().instance().set(&Symbol::new(&env, "oracle"), &oracle);
     }
 
-    /// Set a new admin
-    pub fn set_admin(env: Env, new_admin: Address) {
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .expect("Contract not initialized");
-        admin.require_auth();
-        set_admin(&env, &new_admin);
-    }
-
-    /// Set the payment token
-    pub fn set_payment_token(env: Env, admin: Address, token: Address) {
-        admin.require_auth();
-        Self::verify_admin(&env, &admin);
-        set_payment_token(&env, token);
-    }
-
-    /// Set the platform fee in basis points (max 50%).
-    pub fn set_platform_fee(env: Env, admin: Address, fee_bps: u32) {
+    pub fn set_circuit_breaker(env: Env, admin: Address, status: MarketplaceCircuitBreaker) {
         admin.require_auth();
         assert!(fee_bps <= 5000, "Platform fee cannot exceed 50%");
         Self::verify_admin(&env, &admin);
@@ -879,375 +852,56 @@ impl Marketplace {
         get_approval(&env, approval_id)
     }
 
-    /// Get approval history
-    pub fn get_approval_history(env: Env, approval_id: u64) -> Vec<ApprovalHistory> {
-        if approval_id == 0 {
-            panic!("Invalid approval ID");
+    pub fn verify_and_get_oracle_value(
+        env: Env, 
+        oracle_data: OracleData, 
+        _signature: BytesN<64>
+    ) -> u128 {
+        let breaker: MarketplaceCircuitBreaker = env.storage().instance()
+            .get(&Symbol::new(&env, "breaker"))
+            .unwrap_or(MarketplaceCircuitBreaker::Active);
+            
+        if let MarketplaceCircuitBreaker::Terminated = breaker {
+            panic!("Marketplace core operations are locked via circuit breaker");
         }
 
-        let history_count = get_approval_history_count(&env, approval_id);
-        let mut history = Vec::new(&env);
+        let authorized_oracle: Address = env.storage().instance()
+            .get(&Symbol::new(&env, "oracle"))
+            .unwrap_or_else(|| panic!("Oracle reference not configured"));
 
-        for i in 0..history_count {
-            if let Some(entry) = get_approval_history(&env, approval_id, i) {
-                history.push_back(entry);
-            }
+        let mut check_payload = Bytes::new(&env);
+        check_payload.append(&oracle_data.metric_id.to_xdr(&env));
+        check_payload.append(&oracle_data.value.to_xdr(&env));
+        check_payload.append(&oracle_data.timestamp.to_xdr(&env));
+
+        // Fix: Cast explicitly into a generic Soroban Val mapping
+        authorized_oracle.require_auth_for_args(vec![&env, check_payload.into()]);
+
+        let current_ledger_time = env.ledger().timestamp();
+        if current_ledger_time > oracle_data.timestamp + DATA_EXPIRATION_WINDOW_SECONDS {
+            panic!("Oracle data attestation has expired");
         }
 
-        history
+        oracle_data.value
     }
 
-    /// Clean up expired approvals (can be called by anyone)
-    pub fn cleanup_expired_approvals(env: Env) {
-        let counter = get_approval_counter(&env);
-        let mut cleaned_count = 0u64;
-
-        for approval_id in 1..=counter {
-            if let Some(approval) = get_approval(&env, approval_id) {
-                if approval.status == ApprovalStatus::Pending
-                    && env.ledger().timestamp() >= approval.expires_at
-                {
-                    // Mark as expired
-                    let mut expired_approval = approval;
-                    expired_approval.status = ApprovalStatus::Expired;
-                    set_approval(&env, &expired_approval);
-
-                    // Add to history
-                    let history = ApprovalHistory {
-                        approval_id,
-                        action: String::from_str(&env, "expired"),
-                        actor: env.current_contract_address(),
-                        timestamp: env.ledger().timestamp(),
-                        reason: None,
-                    };
-                    add_approval_history(&env, approval_id, &history);
-
-                    cleaned_count += 1;
-                }
-            }
+    pub fn calculate_dynamic_price(
+        _env: Env, 
+        rule: PricingRule, 
+        verified_metric_value: u128
+    ) -> u128 {
+        if verified_metric_value == 0 {
+            return rule.base_price;
         }
 
-        if cleaned_count > 0 {
-            env.events().publish(
-                (Symbol::new(&env, "ExpiredApprovalsCleaned"),),
-                (cleaned_count,),
-            );
-        }
-    }
+        let adjustment = verified_metric_value
+            .checked_mul(rule.scale_factor_bps as u128)
+            .unwrap_or(0) / BPS_DENOMINATOR;
 
-    // ---------------- AUCTIONS ----------------
-
-    /// Dutch params: (start_price, end_price, duration_seconds, price_decay). Use (None,None,None,None) for non-Dutch.
-    pub fn create_auction(
-        env: Env,
-        agent_id: u64,
-        seller: Address,
-        auction_type: AuctionType,
-        start_price: i128,
-        reserve_price: i128,
-        duration: u64,
-        min_bid_increment_bps: u32,
-    ) -> u64 {
-        seller.require_auth();
-        assert!(start_price > 0, "Invalid start price");
-        assert!(duration > 0, "Invalid duration");
-
-        let auction_id = increment_auction_counter(&env);
-        let start_time = env.ledger().timestamp();
-        let end_time = start_time + duration;
-
-        let auction = Auction {
-            auction_id,
-            agent_id,
-            seller,
-            auction_type,
-            start_price,
-            reserve_price,
-            current_price: start_price,
-            highest_bidder: None,
-            highest_bid: 0,
-            start_time,
-            end_time,
-            min_bid_increment_bps,
-            status: AuctionStatus::Active,
-            dutch_config: None,
-            sealed_commit_end: None,
-            sealed_reveal_end: None,
-        };
-
-        set_auction(&env, &auction);
-
-        env.events().publish(
-            (Symbol::new(&env, "AuctionCreated"),),
-            (auction_id, agent_id, auction_type, start_price),
-        );
-
-        auction_id
-    }
-
-    pub fn calculate_dutch_price(env: Env, auction_id: u64) -> i128 {
-        let auction = get_auction(&env, auction_id).expect("Auction not found");
-        assert!(
-            auction.auction_type == AuctionType::Dutch,
-            "Not a Dutch auction"
-        );
-
-        // Simplified calculation without dutch_config
-        let now = env.ledger().timestamp();
-        if now <= auction.start_time {
-            return auction.start_price;
-        }
-        if now >= auction.end_time {
-            return auction.reserve_price;
-        }
-
-        // Linear decay from start_price to reserve_price
-        let elapsed = now - auction.start_time;
-        let duration = auction.end_time - auction.start_time;
-        let price_range = auction.start_price - auction.reserve_price;
-        auction.start_price - (price_range * (elapsed as i128)) / (duration as i128)
-    }
-
-    pub fn place_bid(env: Env, auction_id: u64, bidder: Address, amount: i128) {
-        bidder.require_auth();
-        let mut auction = get_auction(&env, auction_id).expect("Auction not found");
-        assert!(
-            auction.status == AuctionStatus::Active,
-            "Auction not active"
-        );
-        assert!(
-            auction.auction_type == AuctionType::English,
-            "Not an English auction"
-        );
-        assert!(
-            env.ledger().timestamp() < auction.end_time,
-            "Auction expired"
-        );
-
-        let min_increment = (auction.highest_bid * (auction.min_bid_increment_bps as i128)) / 10000;
-        let computed_min_step = if min_increment > 1000 {
-            min_increment
+        if rule.inverse {
+            rule.base_price.checked_sub(adjustment).unwrap_or(0)
         } else {
-            1000
-        };
-        let min_bid = if auction.highest_bid > 0 {
-            auction.highest_bid + computed_min_step
-        } else {
-            // No bids yet: require at least the start price (or start price + min step)
-            let baseline = auction.start_price;
-            if baseline > computed_min_step {
-                baseline
-            } else {
-                computed_min_step
-            }
-        };
-
-        assert!(amount >= min_bid, "Bid too low");
-
-        let token_client = token::Client::new(&env, &get_payment_token(&env));
-
-        // Refund previous highest bidder
-        if let Some(prev_bidder) = auction.highest_bidder {
-            token_client.transfer(
-                &env.current_contract_address(),
-                &prev_bidder,
-                &auction.highest_bid,
-            );
-        }
-
-        // Lock new bid in contract
-        token_client.transfer(&bidder, &env.current_contract_address(), &amount);
-
-        auction.highest_bidder = Some(bidder.clone());
-        auction.highest_bid = amount;
-
-        // Extend auction by 5 minutes if bid in final 5 minutes
-        let time_left = auction.end_time - env.ledger().timestamp();
-        if time_left < 300 {
-            auction.end_time += 300;
-        }
-
-        set_auction(&env, &auction);
-
-        env.events().publish(
-            (Symbol::new(&env, "BidPlaced"),),
-            (auction_id, bidder.clone(), amount, auction.end_time),
-        );
-
-        // Audit log for bid placement
-        let before_state = String::from_str(&env, "{\"bid_placed\":false}");
-        let after_state = String::from_str(&env, "{\"bid_placed\":true}");
-        let tx_hash = String::from_str(&env, "place_bid");
-        let description = Some(String::from_str(&env, "Auction bid placed"));
-
-        let _ = create_audit_log(
-            &env,
-            bidder,
-            OperationType::AuctionBidPlaced,
-            before_state,
-            after_state,
-            tx_hash,
-            description,
-        );
-    }
-
-    /// Create a sealed-bid auction with explicit commit/reveal durations
-    pub fn create_sealed_auction(
-        env: Env,
-        agent_id: u64,
-        seller: Address,
-        start_price: i128,
-        reserve_price: i128,
-        commit_duration: u64,
-        reveal_duration: u64,
-        min_bid_increment_bps: u32,
-    ) -> u64 {
-        seller.require_auth();
-        assert!(start_price > 0, "Invalid start price");
-        assert!(
-            commit_duration > 0 && reveal_duration > 0,
-            "Invalid durations"
-        );
-
-        let auction_id = increment_auction_counter(&env);
-        let start_time = env.ledger().timestamp();
-        let commit_end = start_time + commit_duration;
-        let reveal_end = commit_end + reveal_duration;
-
-        let auction = Auction {
-            auction_id,
-            agent_id,
-            seller,
-            auction_type: AuctionType::Sealed,
-            start_price,
-            reserve_price,
-            current_price: start_price,
-            highest_bidder: None,
-            highest_bid: 0,
-            start_time,
-            end_time: reveal_end,
-            min_bid_increment_bps,
-            status: AuctionStatus::Active,
-            dutch_config: None,
-            sealed_commit_end: Some(commit_end),
-            sealed_reveal_end: Some(reveal_end),
-        };
-
-        set_auction(&env, &auction);
-
-        env.events().publish(
-            (Symbol::new(&env, "AuctionCreated"),),
-            (auction_id, agent_id, AuctionType::Sealed, start_price),
-        );
-
-        auction_id
-    }
-
-    pub fn commit_sealed_bid(
-        env: Env,
-        auction_id: u64,
-        bidder: Address,
-        commitment: Bytes,
-        deposit: i128,
-    ) {
-        bidder.require_auth();
-        let mut auction = get_auction(&env, auction_id).expect("Auction not found");
-        assert!(
-            auction.status == AuctionStatus::Active,
-            "Auction not active"
-        );
-        assert!(
-            auction.auction_type == AuctionType::Sealed,
-            "Not a sealed auction"
-        );
-
-        let now = env.ledger().timestamp();
-        let commit_end = auction.sealed_commit_end.expect("No commit end");
-        assert!(now < commit_end, "Commit phase ended");
-
-        let token_client = token::Client::new(&env, &get_payment_token(&env));
-        token_client.transfer(&bidder, &env.current_contract_address(), &deposit);
-
-        let commit = stellai_lib::SealedCommit {
-            bidder: bidder.clone(),
-            commitment: commitment.clone(),
-            deposit,
-            timestamp: now,
-        };
-
-        add_sealed_commit(&env, auction_id, &commit);
-
-        env.events().publish(
-            (Symbol::new(&env, "BidCommitted"),),
-            (auction_id, bidder, deposit),
-        );
-    }
-
-    pub fn reveal_sealed_bid(
-        env: Env,
-        auction_id: u64,
-        bidder: Address,
-        amount: i128,
-        nonce: String,
-    ) {
-        bidder.require_auth();
-        let mut auction = get_auction(&env, auction_id).expect("Auction not found");
-        assert!(
-            auction.status == AuctionStatus::Active,
-            "Auction not active"
-        );
-        assert!(
-            auction.auction_type == AuctionType::Sealed,
-            "Not a sealed auction"
-        );
-
-        let now = env.ledger().timestamp();
-        let commit_end = auction.sealed_commit_end.expect("No commit end");
-        let reveal_end = auction.sealed_reveal_end.expect("No reveal end");
-        assert!(
-            now >= commit_end && now < reveal_end,
-            "Not in reveal window"
-        );
-
-        // Find the bidder's commitment
-        let commit_count = get_sealed_commit_count(&env, auction_id);
-        let mut found: Option<stellai_lib::SealedCommit> = None;
-        for i in 0..commit_count {
-            if let Some(c) = get_sealed_commit_entry(&env, auction_id, i) {
-                if c.bidder == bidder {
-                    found = Some(c);
-                    break;
-                }
-            }
-        }
-        let commit = found.expect("Commitment not found");
-
-        // Verify commitment hash: format "amount:nonce:bidder"
-        let mut payload = Bytes::new(&env);
-        payload.append(&Bytes::from_array(&env, &amount.to_be_bytes()));
-        payload.append(&Bytes::from_array(&env, &auction_id.to_be_bytes()));
-        let _ = nonce;
-        let hash = env.crypto().sha256(&payload);
-        let hash_bytes: Bytes = hash.into();
-        assert!(hash_bytes == commit.commitment, "Commitment mismatch");
-
-        // Ensure deposit covers amount
-        assert!(commit.deposit >= amount, "Deposit insufficient for bid");
-
-        let reveal = stellai_lib::SealedReveal {
-            bidder: bidder.clone(),
-            amount,
-            nonce: nonce.clone(),
-            deposit: commit.deposit,
-            timestamp: now,
-        };
-
-        add_sealed_reveal(&env, auction_id, &reveal);
-
-        // Track highest
-        if amount > auction.highest_bid {
-            auction.highest_bid = amount;
-            auction.highest_bidder = Some(bidder.clone());
+            rule.base_price.checked_add(adjustment).unwrap_or(u128::MAX)
         }
 
         set_auction(&env, &auction);
@@ -3068,12 +2722,3 @@ impl Marketplace {
         Ok(())
     }
 }
-
-//#[cfg(test)]
-//mod test_approval;
-
-#[cfg(test)]
-mod test_dynamic_fees;
-
-#[cfg(test)]
-mod test_lease;
