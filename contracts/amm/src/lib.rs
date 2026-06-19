@@ -6,7 +6,7 @@ mod types;
 #[cfg(test)]
 mod test;
 
-use soroban_sdk::{contract, contractimpl, token, Address, Env, String, Symbol};
+use soroban_sdk::{contract, contractimpl, token, Address, Env, String, Symbol, Vec};
 
 use storage::*;
 use types::*;
@@ -24,6 +24,16 @@ impl Amm {
         admin.require_auth();
         set_admin(&env, &admin);
         set_pool_counter(&env, 0);
+    }
+
+    /// Ceiling division to prevent rounding attacks
+    fn ceil_div(a: u128, b: u128) -> u128 {
+        (a + b - 1) / b
+    }
+
+    /// Floor division for safe calculations
+    fn floor_div(a: u128, b: u128) -> u128 {
+        a / b
     }
 
     /// Create a new liquidity pool for a token pair.
@@ -597,8 +607,8 @@ impl Amm {
         token_out: &Address,
     ) -> Option<Address> {
         // Check all possible intermediate tokens
-        let pool_1_tokens = vec![&pool_1.token_a, &pool_1.token_b];
-        let pool_2_tokens = vec![&pool_2.token_a, &pool_2.token_b];
+        let pool_1_tokens = soroban_sdk::vec![&env, pool_1.token_a.clone(), pool_1.token_b.clone()];
+        let pool_2_tokens = soroban_sdk::vec![&env, pool_2.token_a.clone(), pool_2.token_b.clone()];
 
         for &token1 in &pool_1_tokens {
             if token1 == token_in || token1 == token_out {
@@ -771,7 +781,7 @@ impl Amm {
 
         (
             user_total_position,
-            concentration_score,
+            concentration_score.into(),
             params.concentration_threshold_bps,
         )
     }

@@ -1,6 +1,6 @@
 use soroban_sdk::{Address, Env};
 
-use crate::types::{DataKey, Pool};
+use crate::types::{CircuitBreakerState, DataKey, Pool, RiskParams, Route, UserPosition};
 
 /* ---------------- ADMIN ---------------- */
 

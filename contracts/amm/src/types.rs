@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address};
+use soroban_sdk::{contracttype, Address, String, Vec};
 
 /// Storage keys for the AMM contract.
 #[contracttype]

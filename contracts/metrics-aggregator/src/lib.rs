@@ -338,14 +338,14 @@ impl MetricsAggregator {
         let mut total_pnl = 0i128;
         let mut wins = 0u32;
         let mut total_trades = 0u32;
-        let mut total_profit = 0i128;
+        let mut _total_profit = 0i128;
 
         for i in 0..trades.len() {
             if let Some(t) = trades.get(i) {
                 total_pnl += t.pnl;
                 if t.pnl > 0 {
                     wins += 1;
-                    total_profit += t.pnl;
+                    // total_profit += t.pnl; // commented out because unused - clippy warning
                 }
                 total_trades += 1;
             }
@@ -421,7 +421,7 @@ impl MetricsAggregator {
             0
         };
 
-        let current_value = if snapshots.len() > 0 {
+        let current_value = if !snapshots.is_empty() {
             if let Some(last) = snapshots.last() {
                 last.value
             } else {

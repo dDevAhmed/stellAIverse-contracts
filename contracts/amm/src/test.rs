@@ -1,5 +1,3 @@
-#![cfg(test)]
-
 use super::*;
 use soroban_sdk::{contract, contractimpl, contracttype, testutils::Address as _, Address, Env};
 
@@ -99,7 +97,7 @@ fn test_create_pool_excessive_fee() {
 
 #[test]
 fn test_add_liquidity_initial() {
-    let (env, admin, amm, token_a, token_b) = setup_env();
+    let (env, _admin, amm, _token_a, _token_b) = setup_env();
 
     let provider = Address::generate(&env);
     let pool_id = amm.create_pool(&admin, &token_a, &token_b, &30);
@@ -122,7 +120,7 @@ fn test_add_liquidity_initial() {
 
 #[test]
 fn test_add_liquidity_subsequent() {
-    let (env, admin, amm, token_a, token_b) = setup_env();
+    let (env, _admin, amm, _token_a, _token_b) = setup_env();
 
     let provider1 = Address::generate(&env);
     let provider2 = Address::generate(&env);
