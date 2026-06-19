@@ -68,7 +68,7 @@ impl TransactionCoordinator {
     pub fn create_transaction(env: Env, initiator: Address, steps: Vec<TransactionStep>) -> u64 {
         initiator.require_auth();
 
-        if steps.len() == 0 || steps.len() > MAX_TRANSACTION_STEPS as u32 {
+        if steps.is_empty() || steps.len() > MAX_TRANSACTION_STEPS {
             panic_with_error!(&env, Error::TooManySteps);
         }
 
@@ -355,10 +355,10 @@ impl TransactionCoordinator {
         let entry = TransactionJournalEntry {
             transaction_id,
             step_id,
-            action: String::from_str(&env, action),
+            action: String::from_str(env, action),
             timestamp: env.ledger().timestamp(),
             success,
-            error_message: error_message.map(|s| String::from_str(&env, s)),
+            error_message: error_message.map(|s| String::from_str(env, s)),
             state_snapshot: None,
         };
 
@@ -377,10 +377,10 @@ impl TransactionCoordinator {
     ) {
         let _event = TransactionEvent {
             transaction_id,
-            event_type: String::from_str(&env, event_type),
+            event_type: String::from_str(env, event_type),
             step_id,
             timestamp: env.ledger().timestamp(),
-            details: details.map(|s| String::from_str(&env, s)),
+            details: details.map(|s| String::from_str(env, s)),
         };
 
         env.events().publish(

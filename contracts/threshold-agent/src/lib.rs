@@ -12,7 +12,7 @@ pub struct ThresholdAgentContract;
 impl ThresholdAgentContract {
     pub fn create_threshold_agent(env: Env, agent_id: u64, owners: Vec<Address>, threshold_m: u32) {
         assert!(
-            threshold_m <= owners.len() as u32,
+            threshold_m <= owners.len(),
             "Threshold cannot exceed number of owners"
         );
         for i in 0..owners.len() {
@@ -20,15 +20,13 @@ impl ThresholdAgentContract {
             let share = ThresholdKeyShare {
                 agent_id,
                 share_holder: owner,
-                share_index: i as u32,
-                x_coordinate: i as u32,
+                share_index: i,
+                x_coordinate: i,
                 y_coordinate_encrypted: Bytes::new(&env),
                 commitment: Bytes::new(&env),
                 created_at: env.ledger().timestamp(),
             };
-            env.storage()
-                .persistent()
-                .set(&(agent_id, i as u32), &share);
+            env.storage().persistent().set(&(agent_id, i), &share);
         }
         env.events().publish(
             (Symbol::new(&env, "ThresholdAgentCreated"), agent_id),
@@ -75,7 +73,7 @@ impl ThresholdAgentContract {
                 .publish((Symbol::new(&env, "ProposalSigned"), proposal_id), signer);
         }
 
-        if proposal.signatures.len() as u32 >= proposal.threshold_m {
+        if proposal.signatures.len() >= proposal.threshold_m {
             proposal.status = ProposalStatus::Executed;
             env.events().publish(
                 (Symbol::new(&env, "ThresholdActionExecuted"), proposal_id),

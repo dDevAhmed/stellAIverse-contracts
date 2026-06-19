@@ -260,7 +260,7 @@ pub(crate) fn remove_delegator_from_list(env: &Env, delegatee: &Address, delegat
             }
         }
 
-        if new_delegators.len() > 0 {
+        if !new_delegators.is_empty() {
             env.storage()
                 .instance()
                 .set(&DataKey::DelegatorsTo(delegatee.clone()), &new_delegators);
@@ -391,12 +391,6 @@ pub fn get_multisig_approval(env: &Env, proposal_id: u64) -> Option<MultisigAppr
         .get(&DataKey::MultisigApproval(proposal_id))
 }
 
-pub fn remove_multisig_approval(env: &Env, proposal_id: u64) {
-    env.storage()
-        .instance()
-        .remove(&DataKey::MultisigApproval(proposal_id));
-}
-
 /// Check if an address is an authorized multisig signer
 pub fn is_authorized_signer(env: &Env, signer: &Address) -> bool {
     if let Some(config) = get_multisig_config(env) {
@@ -457,12 +451,6 @@ pub fn get_timelock_entry(env: &Env, entry_id: u64) -> Option<TimelockEntry> {
         .get(&DataKey::TimelockEntry(entry_id))
 }
 
-pub fn remove_timelock_entry(env: &Env, entry_id: u64) {
-    env.storage()
-        .instance()
-        .remove(&DataKey::TimelockEntry(entry_id));
-}
-
 /* ---------------- PARAMETER VALIDATION ---------------- */
 
 pub fn set_parameter_rule(env: &Env, rule: &ParameterRule) {
@@ -475,12 +463,6 @@ pub fn get_parameter_rule(env: &Env, parameter_name: String) -> Option<Parameter
     env.storage()
         .instance()
         .get(&DataKey::ParameterRule(parameter_name))
-}
-
-pub fn remove_parameter_rule(env: &Env, parameter_name: String) {
-    env.storage()
-        .instance()
-        .remove(&DataKey::ParameterRule(parameter_name));
 }
 
 /* ---------------- STORAGE SNAPSHOTS ---------------- */
@@ -504,11 +486,4 @@ pub fn get_storage_snapshot(
         contract_address.clone(),
         storage_key.to_xdr(env),
     ))
-}
-
-pub fn remove_storage_snapshot(env: &Env, contract_address: &Address, storage_key: &Val) {
-    env.storage().instance().remove(&DataKey::StorageSnapshot(
-        contract_address.clone(),
-        storage_key.to_xdr(env),
-    ));
 }

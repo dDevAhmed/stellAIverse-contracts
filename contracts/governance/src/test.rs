@@ -1,6 +1,6 @@
 #![cfg(test)]
-extern crate std;
 extern crate alloc;
+extern crate std;
 extern crate std;
 
 use super::*;
@@ -13,7 +13,6 @@ use soroban_sdk::{
 // Mock token contract for testing with mint functionality
 #[contract]
 pub struct MockToken;
-
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1084,7 +1083,7 @@ fn test_queue_parameter_update() {
     let entry_id = gov_client.queue_parameter_update(
         &proposer,
         &proposal_id,
-        &target_contract ,
+        &target_contract,
         &Symbol::new(&e, "update_parameter"),
         &args,
         &None::<u64>, // Use default delay
@@ -1170,7 +1169,7 @@ fn test_execute_before_delay() {
     let entry_id = gov_client.queue_parameter_update(
         &proposer,
         &proposal_id,
-        &target_contract ,
+        &target_contract,
         &Symbol::new(&e, "update_parameter"),
         &args,
         &Some(120), // 2 minutes delay
@@ -1250,7 +1249,7 @@ fn test_execute_after_delay() {
     let entry_id = gov_client.queue_parameter_update(
         &proposer,
         &proposal_id,
-        &target_contract ,
+        &target_contract,
         &Symbol::new(&e, "update_parameter"),
         &args,
         &Some(60), // 1 minute delay
@@ -1344,7 +1343,7 @@ fn test_cancel_queued_update() {
     let entry_id = gov_client.queue_parameter_update(
         &proposer,
         &proposal_id,
-        &target_contract ,
+        &target_contract,
         &Symbol::new(&e, "update_parameter"),
         &args,
         &Some(3600),
@@ -1718,7 +1717,7 @@ fn test_timelock_with_parameter_validation() {
     let entry_id = gov_client.queue_parameter_update(
         &proposer,
         &proposal_id,
-        &target_contract ,
+        &target_contract,
         &Symbol::new(&e, "update_parameter"),
         &args,
         &Some(60),
@@ -2049,10 +2048,11 @@ fn test_multisig_approval_tracking() {
         &None,
         &None,
     );
-    
+
     // Pass the proposal
     gov_client.cast_vote(&admin, &proposal_id, &VoteType::For);
-    e.ledger().with_mut(|li| li.timestamp += 7 * 24 * 60 * 60 + 1);
+    e.ledger()
+        .with_mut(|li| li.timestamp += 7 * 24 * 60 * 60 + 1);
     gov_client.update_proposal_status(&proposal_id);
 
     // Pass the proposal

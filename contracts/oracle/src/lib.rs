@@ -8,7 +8,6 @@ mod types;
 
 use soroban_sdk::{contract, contractimpl, Address, Bytes, BytesN, Env, String, Symbol, Val, Vec};
 use stellai_lib::{
-    admin,
     audit::{create_audit_log, OperationType},
     rbac,
     storage_keys::PROVIDER_LIST_KEY,

@@ -504,6 +504,7 @@ pub struct VCProof {
 /// Wrapper enum so Option<VCProof> works inside contracttype structs
 #[derive(Clone, Debug)]
 #[contracttype]
+#[allow(clippy::large_enum_variant)]
 pub enum OptionalVCProof {
     None,
     Some(VCProof),

@@ -4,7 +4,7 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, Map, String,
     Symbol, Vec,
 };
-use stellai_lib::{admin, audit, rbac, validation};
+use stellai_lib::rbac;
 
 // Contract errors
 #[contracterror]
@@ -236,8 +236,8 @@ impl ComplianceIntegrationContract {
     /// Requires verified KYC for the caller.
     pub fn verify_creds_compliance(
         env: Env,
-        entity_did: String,
-        credential_ids: Vec<u64>,
+        _entity_did: String,
+        _credential_ids: Vec<u64>,
         _compliance_type: ComplianceType,
         caller: Address,
     ) -> Result<bool, Error> {
@@ -285,7 +285,7 @@ impl ComplianceIntegrationContract {
         reviewer.require_auth();
         Self::require_verified_kyc(&env, &reviewer)?;
 
-        if rating < 1 || rating > 5 {
+        if !(1..=5).contains(&rating) {
             return Err(Error::InvalidRating);
         }
 

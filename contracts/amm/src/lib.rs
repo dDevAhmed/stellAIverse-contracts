@@ -6,7 +6,7 @@ mod types;
 #[cfg(test)]
 mod test;
 
-use soroban_sdk::{contract, contractimpl, token, Address, Env, Symbol, String};
+use soroban_sdk::{contract, contractimpl, token, Address, Env, String, Symbol, Vec};
 
 use storage::*;
 use types::*;
@@ -24,6 +24,16 @@ impl Amm {
         admin.require_auth();
         set_admin(&env, &admin);
         set_pool_counter(&env, 0);
+    }
+
+    /// Ceiling division to prevent rounding attacks
+    fn ceil_div(a: u128, b: u128) -> u128 {
+        (a + b - 1) / b
+    }
+
+    /// Floor division for safe calculations
+    fn floor_div(a: u128, b: u128) -> u128 {
+        a / b
     }
 
     /// Create a new liquidity pool for a token pair.
@@ -82,27 +92,33 @@ impl Amm {
         let lp_minted = if pool.lp_total_supply == 0 {
             // First deposit: LP tokens = sqrt(amount_a * amount_b).
             let lp_tokens = isqrt(amount_a * amount_b);
-            
+
             // Enforce minimum LP token threshold
             if lp_tokens < min_threshold {
-                panic!("Liquidity too small - minimum LP tokens required: {}", min_threshold);
+                panic!(
+                    "Liquidity too small - minimum LP tokens required: {}",
+                    min_threshold
+                );
             }
-            
+
             lp_tokens
         } else {
             // Subsequent deposits: use ceiling division to favor the pool
             // This prevents rounding attacks where users deposit tiny amounts
             let lp_a = Self::ceil_div(amount_a * pool.lp_total_supply, pool.reserve_a);
             let lp_b = Self::ceil_div(amount_b * pool.lp_total_supply, pool.reserve_b);
-            
+
             // Take the minimum to avoid diluting existing LPs
             let lp_tokens = if lp_a < lp_b { lp_a } else { lp_b };
-            
+
             // Enforce minimum LP token threshold
             if lp_tokens < min_threshold {
-                panic!("Liquidity too small - minimum LP tokens required: {}", min_threshold);
+                panic!(
+                    "Liquidity too small - minimum LP tokens required: {}",
+                    min_threshold
+                );
             }
-            
+
             lp_tokens
         };
 
@@ -112,15 +128,16 @@ impl Amm {
         if pool.reserve_a > 0 && pool.reserve_b > 0 {
             let pool_ratio = (pool.reserve_a * 10000) / pool.reserve_b;
             let deposit_ratio = (amount_a * 10000) / amount_b;
-            
+
             // Allow 5% deviation from pool ratio
             let ratio_diff = if pool_ratio > deposit_ratio {
                 pool_ratio - deposit_ratio
             } else {
                 deposit_ratio - pool_ratio
             };
-            
-            if ratio_diff > 500 { // 5% in basis points
+
+            if ratio_diff > 500 {
+                // 5% in basis points
                 panic!("Deposit ratio deviates too much from pool ratio");
             }
         }
@@ -171,12 +188,15 @@ impl Amm {
 
         let mut pool = get_pool(&env, pool_id);
         assert!(pool.lp_total_supply > 0, "Pool has no liquidity");
-        
+
         // Check minimum LP token threshold to prevent dust attacks
         let remaining_lp = current_lp - lp_amount;
         let min_threshold = get_min_lp_token_threshold(&env);
         if remaining_lp > 0 && remaining_lp < min_threshold {
-            panic!("Remaining LP tokens below minimum threshold: {}", min_threshold);
+            panic!(
+                "Remaining LP tokens below minimum threshold: {}",
+                min_threshold
+            );
         }
 
         // Calculate proportional share using ceiling division to favor the pool
@@ -341,27 +361,29 @@ impl Amm {
 
         let mut best_route: Option<Route> = None;
         let mut best_output = 0i128;
-        
+
         // Find all possible routes up to max_hops
         let pool_counter = get_pool_counter(&env);
-        
+
         // Try direct swap first (1 hop)
         for pool_id in 0..pool_counter {
-            if let Some(route) = Self::try_direct_route(&env, pool_id, &token_in, &token_out, amount_in) {
+            if let Some(route) =
+                Self::try_direct_route(&env, pool_id, &token_in, &token_out, amount_in)
+            {
                 if route.amount_out > best_output {
                     best_output = route.amount_out;
                     best_route = Some(route);
                 }
             }
         }
-        
+
         // Try 2-hop routes if direct route not found or better
         if max_hops >= 2 && (best_route.is_none() || best_output < amount_in / 2) {
             for pool_id_1 in 0..pool_counter {
                 for pool_id_2 in 0..pool_counter {
                     if pool_id_1 != pool_id_2 {
                         if let Some(route) = Self::try_two_hop_route(
-                            &env, pool_id_1, pool_id_2, &token_in, &token_out, amount_in
+                            &env, pool_id_1, pool_id_2, &token_in, &token_out, amount_in,
                         ) {
                             if route.amount_out > best_output {
                                 best_output = route.amount_out;
@@ -372,13 +394,13 @@ impl Amm {
                 }
             }
         }
-        
+
         // Try 3-hop routes if needed
         if max_hops >= 3 && (best_route.is_none() || best_output < amount_in / 3) {
             // For simplicity, implement basic 3-hop search
             // In production, this would use more sophisticated pathfinding
         }
-        
+
         best_route.unwrap_or_else(|| panic!("No valid route found"))
     }
 
@@ -391,24 +413,35 @@ impl Amm {
         min_amount_out: i128,
     ) -> i128 {
         user.require_auth();
-        
+
         assert!(route.amount_in > 0, "Invalid route amount");
-        assert!(route.amount_out >= min_amount_out, "Route output below slippage tolerance");
-        
+        assert!(
+            route.amount_out >= min_amount_out,
+            "Route output below slippage tolerance"
+        );
+
         // Check trading constraints
         Self::check_trading_allowed(&env);
         Self::check_position_limits(&env, &user, &route.token_in, route.amount_in);
-        
+
         let mut current_amount = route.amount_in;
         let mut current_token = route.token_in.clone();
         let mut total_fees = 0u32;
-        
+
         // Execute each hop sequentially
         for (i, hop) in route.hops.iter().enumerate() {
             // Validate hop
-            assert!(hop.amount_in == current_amount, "Hop amount mismatch at hop {}", i);
-            assert!(hop.token_in == current_token, "Hop token mismatch at hop {}", i);
-            
+            assert!(
+                hop.amount_in == current_amount,
+                "Hop amount mismatch at hop {}",
+                i
+            );
+            assert!(
+                hop.token_in == current_token,
+                "Hop token mismatch at hop {}",
+                i
+            );
+
             // Execute the swap for this hop
             let pool = get_pool(&env, hop.pool_id);
             let actual_output = Self::pool_swap(
@@ -419,27 +452,36 @@ impl Amm {
                 hop.amount_in,
                 hop.min_amount_out,
             );
-            
+
             // Update state for next hop
             current_amount = actual_output;
             current_token = hop.token_out.clone();
             total_fees += pool.fee_bps;
-            
+
             // Emit hop completion event
             env.events().publish(
                 (Symbol::new(&env, "HopCompleted"),),
-                (i, hop.pool_id, hop.token_in.clone(), hop.token_out.clone(), actual_output),
+                (
+                    i,
+                    hop.pool_id,
+                    hop.token_in.clone(),
+                    hop.token_out.clone(),
+                    actual_output,
+                ),
             );
         }
-        
+
         // Verify final output
-        assert!(current_amount >= min_amount_out, "Final output below slippage tolerance");
+        assert!(
+            current_amount >= min_amount_out,
+            "Final output below slippage tolerance"
+        );
         assert!(current_token == route.token_out, "Final token mismatch");
-        
+
         // Update user position tracking
         Self::update_user_position(&env, &user, &route.token_in, -route.amount_in);
         Self::update_user_position(&env, &user, &route.token_out, current_amount);
-        
+
         // Emit route completion event
         env.events().publish(
             (Symbol::new(&env, "MultiHopSwapCompleted"),),
@@ -453,7 +495,7 @@ impl Amm {
                 total_fees,
             ),
         );
-        
+
         current_amount
     }
 
@@ -466,29 +508,30 @@ impl Amm {
         amount_in: i128,
     ) -> Option<Route> {
         let pool = get_pool(env, pool_id);
-        
+
         // Check if pool contains the token pair
-        let (is_a_to_b, reserve_in, reserve_out) = if token_in == &pool.token_a && token_out == &pool.token_b {
-            (true, pool.reserve_a, pool.reserve_b)
-        } else if token_in == &pool.token_b && token_out == &pool.token_a {
-            (false, pool.reserve_b, pool.reserve_a)
-        } else {
-            return None; // Pool doesn't contain this pair
-        };
-        
+        let (is_a_to_b, reserve_in, reserve_out) =
+            if token_in == &pool.token_a && token_out == &pool.token_b {
+                (true, pool.reserve_a, pool.reserve_b)
+            } else if token_in == &pool.token_b && token_out == &pool.token_a {
+                (false, pool.reserve_b, pool.reserve_a)
+            } else {
+                return None; // Pool doesn't contain this pair
+            };
+
         if reserve_in == 0 || reserve_out == 0 {
             return None; // No liquidity
         }
-        
+
         // Calculate expected output using constant product formula
         let fee_factor = 10_000 - pool.fee_bps as i128;
         let amount_in_after_fee = (amount_in * fee_factor) / 10_000;
         let amount_out = (reserve_out * amount_in_after_fee) / (reserve_in + amount_in_after_fee);
-        
+
         if amount_out <= 0 {
             return None;
         }
-        
+
         let hop = Hop {
             pool_id,
             token_in: token_in.clone(),
@@ -496,10 +539,10 @@ impl Amm {
             amount_in,
             min_amount_out: amount_out * 95 / 100, // 5% slippage protection
         };
-        
+
         let mut hops = Vec::new(env);
         hops.push_back(hop);
-        
+
         Some(Route {
             token_in: token_in.clone(),
             token_out: token_out.clone(),
@@ -522,21 +565,29 @@ impl Amm {
     ) -> Option<Route> {
         let pool_1 = get_pool(env, pool_id_1);
         let pool_2 = get_pool(env, pool_id_2);
-        
+
         // Find intermediate token
-        let intermediate_token = Self::find_intermediate_token(&pool_1, &pool_2, token_in, token_out)?;
-        
+        let intermediate_token =
+            Self::find_intermediate_token(&pool_1, &pool_2, token_in, token_out)?;
+
         // Calculate first hop output
-        let route_1 = Self::try_direct_route(env, pool_id_1, token_in, &intermediate_token, amount_in)?;
+        let route_1 =
+            Self::try_direct_route(env, pool_id_1, token_in, &intermediate_token, amount_in)?;
         let intermediate_amount = route_1.amount_out;
-        
+
         // Calculate second hop output
-        let route_2 = Self::try_direct_route(env, pool_id_2, &intermediate_token, token_out, intermediate_amount)?;
-        
+        let route_2 = Self::try_direct_route(
+            env,
+            pool_id_2,
+            &intermediate_token,
+            token_out,
+            intermediate_amount,
+        )?;
+
         let mut hops = Vec::new(env);
         hops.push_back(route_1.hops.get(0).unwrap().clone());
         hops.push_back(route_2.hops.get(0).unwrap().clone());
-        
+
         Some(Route {
             token_in: token_in.clone(),
             token_out: token_out.clone(),
@@ -556,9 +607,9 @@ impl Amm {
         token_out: &Address,
     ) -> Option<Address> {
         // Check all possible intermediate tokens
-        let pool_1_tokens = vec![&pool_1.token_a, &pool_1.token_b];
-        let pool_2_tokens = vec![&pool_2.token_a, &pool_2.token_b];
-        
+        let pool_1_tokens = soroban_sdk::vec![&env, pool_1.token_a.clone(), pool_1.token_b.clone()];
+        let pool_2_tokens = soroban_sdk::vec![&env, pool_2.token_a.clone(), pool_2.token_b.clone()];
+
         for &token1 in &pool_1_tokens {
             if token1 == token_in || token1 == token_out {
                 continue;
@@ -644,9 +695,9 @@ impl Amm {
     pub fn pause_trading(env: Env, admin: Address) {
         admin.require_auth();
         Self::verify_admin(&env, &admin);
-        
+
         set_trading_paused(&env, true);
-        
+
         env.events().publish(
             (Symbol::new(&env, "TradingPaused"),),
             (admin, env.ledger().timestamp()),
@@ -657,9 +708,9 @@ impl Amm {
     pub fn resume_trading(env: Env, admin: Address) {
         admin.require_auth();
         Self::verify_admin(&env, &admin);
-        
+
         set_trading_paused(&env, false);
-        
+
         env.events().publish(
             (Symbol::new(&env, "TradingResumed"),),
             (admin, env.ledger().timestamp()),
@@ -670,9 +721,9 @@ impl Amm {
     pub fn set_admin(env: Env, current_admin: Address, new_admin: Address) {
         current_admin.require_auth();
         Self::verify_admin(&env, &current_admin);
-        
+
         set_admin(&env, &new_admin);
-        
+
         env.events().publish(
             (Symbol::new(&env, "AdminUpdated"),),
             (current_admin, new_admin),
@@ -683,16 +734,34 @@ impl Amm {
     pub fn set_risk_parameters(env: Env, admin: Address, params: RiskParams) {
         admin.require_auth();
         Self::verify_admin(&env, &admin);
-        
-        assert!(params.max_position_per_user > 0, "Invalid max position per user");
-        assert!(params.max_position_per_asset > 0, "Invalid max position per asset");
-        assert!(params.concentration_threshold_bps <= 10000, "Invalid concentration threshold");
-        assert!(params.circuit_breaker_threshold_bps <= 10000, "Invalid circuit breaker threshold");
-        assert!(params.circuit_breaker_cooldown > 0, "Invalid cooldown period");
-        assert!(params.min_lp_token_threshold > 0, "Invalid LP token threshold");
-        
+
+        assert!(
+            params.max_position_per_user > 0,
+            "Invalid max position per user"
+        );
+        assert!(
+            params.max_position_per_asset > 0,
+            "Invalid max position per asset"
+        );
+        assert!(
+            params.concentration_threshold_bps <= 10000,
+            "Invalid concentration threshold"
+        );
+        assert!(
+            params.circuit_breaker_threshold_bps <= 10000,
+            "Invalid circuit breaker threshold"
+        );
+        assert!(
+            params.circuit_breaker_cooldown > 0,
+            "Invalid cooldown period"
+        );
+        assert!(
+            params.min_lp_token_threshold > 0,
+            "Invalid LP token threshold"
+        );
+
         set_risk_params(&env, &params);
-        
+
         env.events().publish(
             (Symbol::new(&env, "RiskParamsUpdated"),),
             (
@@ -709,27 +778,31 @@ impl Amm {
         let params = get_risk_params(&env);
         let user_total_position = Self::get_user_total_position(&env, &user);
         let concentration_score = Self::calculate_concentration_score(&env, &user);
-        
-        (user_total_position, concentration_score, params.concentration_threshold_bps)
+
+        (
+            user_total_position,
+            concentration_score.into(),
+            params.concentration_threshold_bps,
+        )
     }
 
     /// Trigger circuit breaker manually (admin only)
     pub fn trigger_circuit_breaker(env: Env, admin: Address, reason: String) {
         admin.require_auth();
         Self::verify_admin(&env, &admin);
-        
+
         let params = get_risk_params(&env);
         let now = env.ledger().timestamp();
-        
+
         let state = CircuitBreakerState {
             is_active: true,
             triggered_at: now,
             reason: reason.clone(),
             cooldown_until: now + params.circuit_breaker_cooldown,
         };
-        
+
         set_circuit_breaker_state(&env, &state);
-        
+
         env.events().publish(
             (Symbol::new(&env, "CircuitBreakerTriggered"),),
             (reason, now),
@@ -749,7 +822,7 @@ impl Amm {
         if is_trading_paused(env) {
             panic!("Trading is currently paused");
         }
-        
+
         // Check circuit breaker
         if let Some(state) = get_circuit_breaker_state(env) {
             if state.is_active {
@@ -771,18 +844,18 @@ impl Amm {
         let params = get_risk_params(env);
         let current_position = Self::get_user_position_for_token(env, user, token);
         let new_position = current_position + amount;
-        
+
         // Check per-user limit
         let user_total = Self::get_user_total_position(env, user);
         if user_total + amount > params.max_position_per_user {
             panic!("Exceeds maximum position per user");
         }
-        
+
         // Check per-asset limit
         if new_position > params.max_position_per_asset {
             panic!("Exceeds maximum position per asset");
         }
-        
+
         // Check concentration risk
         let concentration = Self::calculate_concentration_score(env, user);
         if concentration > params.concentration_threshold_bps {
@@ -794,7 +867,7 @@ impl Amm {
     fn update_user_position(env: &Env, user: &Address, token: &Address, amount_change: i128) {
         let current = Self::get_user_position_for_token(env, user, token);
         let new_position = current + amount_change;
-        
+
         if new_position == 0 {
             // Remove position if zero
             env.storage()
@@ -822,7 +895,7 @@ impl Amm {
     fn get_user_total_position(env: &Env, user: &Address) -> i128 {
         let pool_counter = get_pool_counter(env);
         let mut total = 0i128;
-        
+
         // This is a simplified implementation
         // In production, you'd maintain a separate total tracking
         for pool_id in 0..pool_counter {
@@ -834,7 +907,7 @@ impl Amm {
                 total += pos.position_size.abs();
             }
         }
-        
+
         total
     }
 
@@ -844,10 +917,10 @@ impl Amm {
         if total == 0 {
             return 0;
         }
-        
+
         let pool_counter = get_pool_counter(env);
         let mut max_concentration = 0u32;
-        
+
         for pool_id in 0..pool_counter {
             let pool = get_pool(env, pool_id);
             if let Some(pos) = get_user_position(env, user, &pool.token_a) {
@@ -859,7 +932,7 @@ impl Amm {
                 max_concentration = max_concentration.max(concentration as u32);
             }
         }
-        
+
         max_concentration
     }
 }

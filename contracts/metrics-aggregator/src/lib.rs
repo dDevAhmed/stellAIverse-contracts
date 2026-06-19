@@ -297,24 +297,17 @@ impl MetricsAggregator {
         };
 
         let key = (Symbol::new(&env, "portfolio"), user.clone());
-        let mut snapshots: Vec<PortfolioSnapshot> = env.storage().instance().get(&key).unwrap_or(Vec::new(&env));
+        let mut snapshots: Vec<PortfolioSnapshot> =
+            env.storage().instance().get(&key).unwrap_or(Vec::new(&env));
         snapshots.push_back(snapshot);
         env.storage().instance().set(&key, &snapshots);
 
-        env.events().publish(
-            (Symbol::new(&env, "portfolio_snapshot"),),
-            (user, value),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "portfolio_snapshot"),), (user, value));
     }
 
     /// Record a trade for a user. Admin-only.
-    pub fn record_trade(
-        env: Env,
-        caller: Address,
-        user: Address,
-        pnl: i128,
-        size: i128,
-    ) {
+    pub fn record_trade(env: Env, caller: Address, user: Address, pnl: i128, size: i128) {
         caller.require_auth();
         Self::verify_admin(&env, &caller);
 
@@ -329,28 +322,30 @@ impl MetricsAggregator {
         trades.push_back(trade);
         env.storage().instance().set(&key, &trades);
 
-        env.events().publish(
-            (Symbol::new(&env, "trade_recorded"),),
-            (user, pnl),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "trade_recorded"),), (user, pnl));
     }
 
     /// Get analytics summary for a user.
     pub fn get_analytics_summary(env: Env, user: Address) -> AnalyticsSummary {
         let trades_key = (Symbol::new(&env, "trades"), user.clone());
-        let trades: Vec<Trade> = env.storage().instance().get(&trades_key).unwrap_or(Vec::new(&env));
+        let trades: Vec<Trade> = env
+            .storage()
+            .instance()
+            .get(&trades_key)
+            .unwrap_or(Vec::new(&env));
 
         let mut total_pnl = 0i128;
         let mut wins = 0u32;
         let mut total_trades = 0u32;
-        let mut total_profit = 0i128;
+        let mut _total_profit = 0i128;
 
         for i in 0..trades.len() {
             if let Some(t) = trades.get(i) {
                 total_pnl += t.pnl;
                 if t.pnl > 0 {
                     wins += 1;
-                    total_profit += t.pnl;
+                    // total_profit += t.pnl; // commented out because unused - clippy warning
                 }
                 total_trades += 1;
             }
@@ -370,7 +365,11 @@ impl MetricsAggregator {
 
         // Sharpe ratio calculation (simplified)
         let portfolio_key = (Symbol::new(&env, "portfolio"), user.clone());
-        let snapshots: Vec<PortfolioSnapshot> = env.storage().instance().get(&portfolio_key).unwrap_or(Vec::new(&env));
+        let snapshots: Vec<PortfolioSnapshot> = env
+            .storage()
+            .instance()
+            .get(&portfolio_key)
+            .unwrap_or(Vec::new(&env));
 
         let mut returns: Vec<i128> = Vec::new(&env);
         if snapshots.len() > 1 {
@@ -422,7 +421,7 @@ impl MetricsAggregator {
             0
         };
 
-        let current_value = if snapshots.len() > 0 {
+        let current_value = if !snapshots.is_empty() {
             if let Some(last) = snapshots.last() {
                 last.value
             } else {

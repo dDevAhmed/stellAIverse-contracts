@@ -1,7 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Symbol, Vec};
-use stellai_lib::{admin, errors::ContractError, ADMIN_KEY};
+use stellai_lib::{errors::ContractError, ADMIN_KEY};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -273,32 +273,32 @@ impl AffiliateBonuses {
         // Calculate and record commission if threshold met
         let commission_amount = (volume * config.commission_rate_bps as i128) / 10000;
 
-        if commission_amount > 0 && referral_record.total_volume >= config.min_volume_for_commission
+        if commission_amount > 0
+            && referral_record.total_volume >= config.min_volume_for_commission
+            && user_total_commission + commission_amount <= config.max_commission_per_user
         {
-            if user_total_commission + commission_amount <= config.max_commission_per_user {
-                pending_commissions += commission_amount;
-                user_total_commission += commission_amount;
+            pending_commissions += commission_amount;
+            user_total_commission += commission_amount;
 
-                env.storage()
-                    .instance()
-                    .set(&commission_key, &pending_commissions);
-                env.storage()
-                    .instance()
-                    .set(&user_commission_key, &user_total_commission);
+            env.storage()
+                .instance()
+                .set(&commission_key, &pending_commissions);
+            env.storage()
+                .instance()
+                .set(&user_commission_key, &user_total_commission);
 
-                // Update affiliate stats
-                affiliate_info.total_volume_generated += volume;
-                affiliate_info.total_commissions_earned += commission_amount;
-                affiliate_info.last_activity_at = now;
-                env.storage()
-                    .instance()
-                    .set(&affiliate_key, &affiliate_info);
+            // Update affiliate stats
+            affiliate_info.total_volume_generated += volume;
+            affiliate_info.total_commissions_earned += commission_amount;
+            affiliate_info.last_activity_at = now;
+            env.storage()
+                .instance()
+                .set(&affiliate_key, &affiliate_info);
 
-                env.events().publish(
-                    (Symbol::new(&env, "commission"), Symbol::new(&env, "earned")),
-                    (affiliate, user, commission_amount, volume),
-                );
-            }
+            env.events().publish(
+                (Symbol::new(&env, "commission"), Symbol::new(&env, "earned")),
+                (affiliate, user, commission_amount, volume),
+            );
         }
 
         Ok(())
@@ -393,12 +393,12 @@ impl AffiliateBonuses {
             .instance()
             .get(&Symbol::new(&env, "affiliate_counter"))
             .unwrap_or(0);
-        let mut affiliates = Vec::new(&env);
+        let affiliates = Vec::new(&env);
 
         // This is a simplified approach - in production, you'd want a more efficient ranking system
         // Note: For now, this is a placeholder that does not return real data to satisfy the compiler
         for _ in 1..=affiliate_counter {
-            if affiliates.len() >= limit as u32 {
+            if affiliates.len() >= limit {
                 break;
             }
             // In a real implementation, we would iterate over a list of registered affiliates

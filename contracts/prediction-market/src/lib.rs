@@ -138,7 +138,7 @@ impl PredictionMarket {
         winnings
     }
 
-    pub fn get_agent_reputation(env: Env, agent: Address, _reason: ReputationReason) -> u128 {
+    pub fn get_agent_reputation(_env: Env, _agent: Address, _reason: ReputationReason) -> u128 {
         // Placeholder implementation - would integrate with agent contract
         1000u128
     }

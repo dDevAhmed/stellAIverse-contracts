@@ -1,6 +1,6 @@
 use soroban_sdk::{Address, Env};
 
-use crate::types::{DataKey, Pool};
+use crate::types::{CircuitBreakerState, DataKey, Pool, RiskParams, Route, UserPosition};
 
 /* ---------------- ADMIN ---------------- */
 
@@ -75,11 +75,11 @@ pub fn invalidate_query_cache(env: &Env, pool_id: u64) {
     // Remove cached price data
     let price_cache_key = DataKey::PriceCache(pool_id);
     env.storage().instance().remove(&price_cache_key);
-    
-    // Remove cached reserve data  
+
+    // Remove cached reserve data
     let reserve_cache_key = DataKey::ReserveCache(pool_id);
     env.storage().instance().remove(&reserve_cache_key);
-    
+
     // Emit cache invalidation event for monitoring
     env.events().publish(
         (soroban_sdk::Symbol::new(env, "CacheInvalidated"),),
@@ -141,9 +141,7 @@ pub fn set_trading_paused(env: &Env, paused: bool) {
 }
 
 pub fn get_circuit_breaker_state(env: &Env) -> Option<CircuitBreakerState> {
-    env.storage()
-        .instance()
-        .get(&DataKey::CircuitBreakerActive)
+    env.storage().instance().get(&DataKey::CircuitBreakerActive)
 }
 
 pub fn set_circuit_breaker_state(env: &Env, state: &CircuitBreakerState) {
@@ -159,19 +157,17 @@ pub fn get_risk_params(env: &Env) -> RiskParams {
         .instance()
         .get(&DataKey::RiskParams)
         .unwrap_or_else(|| RiskParams {
-            max_position_per_user: 1_000_000_000, // Default: 1B tokens
+            max_position_per_user: 1_000_000_000,   // Default: 1B tokens
             max_position_per_asset: 10_000_000_000, // Default: 10B tokens
-            concentration_threshold_bps: 3000, // Default: 30%
-            circuit_breaker_threshold_bps: 1500, // Default: 15%
-            circuit_breaker_cooldown: 3600, // Default: 1 hour
-            min_lp_token_threshold: 1000, // Default: 1000 tokens
+            concentration_threshold_bps: 3000,      // Default: 30%
+            circuit_breaker_threshold_bps: 1500,    // Default: 15%
+            circuit_breaker_cooldown: 3600,         // Default: 1 hour
+            min_lp_token_threshold: 1000,           // Default: 1000 tokens
         })
 }
 
 pub fn set_risk_params(env: &Env, params: &RiskParams) {
-    env.storage()
-        .instance()
-        .set(&DataKey::RiskParams, params);
+    env.storage().instance().set(&DataKey::RiskParams, params);
 }
 
 pub fn get_user_position(env: &Env, user: &Address, token: &Address) -> Option<UserPosition> {
@@ -181,9 +177,10 @@ pub fn get_user_position(env: &Env, user: &Address, token: &Address) -> Option<U
 }
 
 pub fn set_user_position(env: &Env, user: &Address, token: &Address, position: &UserPosition) {
-    env.storage()
-        .persistent()
-        .set(&DataKey::UserPosition(user.clone(), token.clone()), position);
+    env.storage().persistent().set(
+        &DataKey::UserPosition(user.clone(), token.clone()),
+        position,
+    );
 }
 
 pub fn get_min_lp_token_threshold(env: &Env) -> i128 {
@@ -198,4 +195,3 @@ pub fn set_min_lp_token_threshold(env: &Env, threshold: i128) {
         .instance()
         .set(&DataKey::MinLpTokenThreshold, &threshold);
 }
-

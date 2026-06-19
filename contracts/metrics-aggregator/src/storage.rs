@@ -225,7 +225,7 @@ pub fn add_feedback_to_agent(env: &Env, agent_id: u64, feedback_id: u64) {
     env.storage().persistent().set(&list_key, &list);
 }
 
-pub fn get_feedback_ids_for_agent(env: &Env, agent_id: u64) -> soroban_sdk::Vec<u64> {
+pub fn _get_feedback_ids_for_agent(env: &Env, agent_id: u64) -> soroban_sdk::Vec<u64> {
     let list_key = (Symbol::new(env, "fb_list"), agent_id);
     env.storage()
         .persistent()

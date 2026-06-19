@@ -245,7 +245,7 @@ impl StakingBonuses {
         let timestamp = env.ledger().timestamp();
         let cache_key = (Symbol::new(env, CACHE_INVALIDATION_KEY), user.clone());
         env.storage().instance().set(&cache_key, &timestamp);
-        
+
         // Emit cache invalidation event for monitoring
         env.events().publish(
             (
@@ -518,7 +518,7 @@ mod tests {
         client.init_contract(&admin);
 
         client.stake(&user, &token, &1_000);
-        
+
         // Advance time past lock period
         env.ledger()
             .set_timestamp(31 * DAY_IN_SECONDS + LOCK_PERIOD_SECONDS + 1);
@@ -548,7 +548,7 @@ mod tests {
         client.init_contract(&admin);
 
         client.stake(&user, &token, &1_000);
-        
+
         // Advance time to accrue rewards
         env.ledger().set_timestamp(31 * DAY_IN_SECONDS);
 

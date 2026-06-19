@@ -37,7 +37,7 @@ SIZE_BEFORE=$(wc -c < "$WASM_FILE")
 if command -v wasm-opt >/dev/null 2>&1; then
     echo "Optimizing wasm with wasm-opt -Oz..."
     TEMP_FILE="$WASM_FILE.optimized"
-    wasm-opt -Oz --strip-debug --strip-producers -o "$TEMP_FILE" "$WASM_FILE"
+    wasm-opt -Oz --strip-debug --strip-producers --enable-bulk-memory -o "$TEMP_FILE" "$WASM_FILE"
     mv "$TEMP_FILE" "$WASM_FILE"
 elif command -v wasm-strip >/dev/null 2>&1; then
     echo "Stripping wasm with wasm-strip..."

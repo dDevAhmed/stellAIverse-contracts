@@ -1,8 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, Address, Bytes, BytesN, Env, IntoVal, Map,
-    String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, Address, Bytes, Env, Map, Symbol, Vec,
 };
 
 // Interface for the AgentNFT contract
@@ -137,7 +136,7 @@ impl BridgeManager {
 
         admin.require_auth();
 
-        if signers.len() == 0 {
+        if signers.is_empty() {
             return Err(BridgeError::SignerConfigMissing);
         }
         if m_required == 0 || m_required > signers.len() {
@@ -190,7 +189,7 @@ impl BridgeManager {
     ) -> Result<(), BridgeError> {
         Self::require_admin(&env, &admin)?;
 
-        if signers.len() == 0 {
+        if signers.is_empty() {
             return Err(BridgeError::SignerConfigMissing);
         }
         if m_required == 0 || m_required > signers.len() {
@@ -393,7 +392,7 @@ impl BridgeManager {
         req.last_updated_at = env.ledger().timestamp();
 
         let cfg = Self::get_signer_config(&env)?;
-        let approvals = req.outbound_approvals.len() as u32;
+        let approvals = req.outbound_approvals.len();
 
         if approvals >= cfg.m_required {
             req.status = BridgeStatus::OutboundCompleted;
@@ -473,7 +472,7 @@ impl BridgeManager {
         req.last_updated_at = env.ledger().timestamp();
 
         let cfg = Self::get_signer_config(&env)?;
-        let approvals = req.inbound_approvals.len() as u32;
+        let approvals = req.inbound_approvals.len();
 
         if approvals >= cfg.m_required {
             req.status = BridgeStatus::InboundApproved;
@@ -809,7 +808,7 @@ impl BridgeManager {
 
     /// Get bridge statistics for monitoring
     pub fn get_bridge_stats(env: Env) -> Result<Map<Symbol, u64>, BridgeError> {
-        let stats = Map::new(&env);
+        let mut stats = Map::new(&env);
 
         let bridge_counter: u64 = env
             .storage()

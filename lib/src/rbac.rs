@@ -326,7 +326,7 @@ fn remove_from_governance(env: &Env, address: &Address) -> Result<(), ContractEr
 
     if let Some(i) = index {
         governance_roles.remove(i);
-        if governance_roles.len() > 0 {
+        if !governance_roles.is_empty() {
             env.storage()
                 .instance()
                 .set(&Symbol::new(env, GOVERNANCE_ROLE_KEY), &governance_roles);
@@ -358,7 +358,7 @@ fn remove_from_kyc_operators(env: &Env, address: &Address) -> Result<(), Contrac
 
     if let Some(i) = index {
         kyc_operators.remove(i);
-        if kyc_operators.len() > 0 {
+        if !kyc_operators.is_empty() {
             env.storage()
                 .instance()
                 .set(&Symbol::new(env, KYC_OPERATOR_ROLE_KEY), &kyc_operators);

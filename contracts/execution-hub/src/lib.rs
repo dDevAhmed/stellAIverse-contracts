@@ -1258,11 +1258,11 @@ impl ExecutionHub {
 
     /// Execute multiple operations atomically with user authentication (Issue #216)
     /// All operations must succeed or none are executed
-    /// 
+    ///
     /// # Arguments
     /// * `executor` - Address of the executor (must be authenticated)
     /// * `operations` - Vector of batch operations to execute
-    /// 
+    ///
     /// # Returns
     /// Vector of execution IDs for each operation
     pub fn execute_batch_atomic(
@@ -1284,7 +1284,7 @@ impl ExecutionHub {
         // Verify all operations belong to authenticated user
         for i in 0..operations.len() {
             let op = operations.get(i).expect("Operation missing");
-            
+
             // Permission Check: re-validate owner/operator from storage (Issue #152)
             rbac::require_owner_or_operator(
                 &env,
@@ -1303,7 +1303,12 @@ impl ExecutionHub {
                         .map(|d| (d.operator, d.expires_at))
                 },
             )
-            .unwrap_or_else(|_| panic!("Unauthorized: executor is not owner or operator for agent {}", op.agent_id));
+            .unwrap_or_else(|_| {
+                panic!(
+                    "Unauthorized: executor is not owner or operator for agent {}",
+                    op.agent_id
+                )
+            });
         }
 
         // Apply rate limiting to batch operations (Issue #216)
@@ -1314,10 +1319,10 @@ impl ExecutionHub {
 
         // Execute all operations atomically
         let mut execution_ids = Vec::new(&env);
-        
+
         for i in 0..operations.len() {
             let op = operations.get(i).expect("Operation missing");
-            
+
             // Validate operation
             Self::validate_agent_id(op.agent_id);
             Self::validate_string_length(&op.action, "Action name");
@@ -1327,7 +1332,10 @@ impl ExecutionHub {
             // Replay protection
             let stored_nonce = Self::get_action_nonce(&env, op.agent_id);
             if op.nonce <= stored_nonce {
-                panic!("Invalid nonce: replay protection triggered for operation {}", i);
+                panic!(
+                    "Invalid nonce: replay protection triggered for operation {}",
+                    i
+                );
             }
 
             let execution_id = Self::next_execution_id(&env);
@@ -1361,7 +1369,12 @@ impl ExecutionHub {
             // Emit event
             env.events().publish(
                 (symbol_short!("batch_exec"),),
-                (execution_id, op.agent_id, op.action.clone(), executor.clone()),
+                (
+                    execution_id,
+                    op.agent_id,
+                    op.action.clone(),
+                    executor.clone(),
+                ),
             );
 
             execution_ids.push_back(execution_id);
@@ -1372,11 +1385,11 @@ impl ExecutionHub {
 
     /// Execute multiple operations with best-effort semantics (Issue #216)
     /// Individual failures are recorded but don't stop other operations
-    /// 
+    ///
     /// # Arguments
     /// * `executor` - Address of the executor (must be authenticated)
     /// * `operations` - Vector of batch operations to execute
-    /// 
+    ///
     /// # Returns
     /// Vector of batch results showing success/failure for each operation
     pub fn execute_batch_best_effort(
@@ -1398,7 +1411,7 @@ impl ExecutionHub {
         // Verify all operations belong to authenticated user
         for i in 0..operations.len() {
             let op = operations.get(i).expect("Operation missing");
-            
+
             // Permission Check: re-validate owner/operator from storage (Issue #152)
             rbac::require_owner_or_operator(
                 &env,
@@ -1417,15 +1430,20 @@ impl ExecutionHub {
                         .map(|d| (d.operator, d.expires_at))
                 },
             )
-            .unwrap_or_else(|_| panic!("Unauthorized: executor is not owner or operator for agent {}", op.agent_id));
+            .unwrap_or_else(|_| {
+                panic!(
+                    "Unauthorized: executor is not owner or operator for agent {}",
+                    op.agent_id
+                )
+            });
         }
 
         // Execute operations with best-effort semantics
         let mut results = Vec::new(&env);
-        
+
         for i in 0..operations.len() {
             let op = operations.get(i).expect("Operation missing");
-            
+
             // Try to execute each operation, catching errors
             let result = Self::execute_single_operation(
                 &env,
@@ -2130,11 +2148,11 @@ mod test {
 
         // Create batch operations
         let mut operations = Vec::new(&env);
-        
+
         let action1 = String::from_str(&env, "action1");
         let params1 = Bytes::from_array(&env, &[1, 2, 3]);
         let hash1 = Bytes::from_array(&env, &[0x11, 0x22]);
-        
+
         let action2 = String::from_str(&env, "action2");
         let params2 = Bytes::from_array(&env, &[4, 5, 6]);
         let hash2 = Bytes::from_array(&env, &[0x33, 0x44]);
@@ -2175,7 +2193,7 @@ mod test {
 
         // Create batch operations
         let mut operations = Vec::new(&env);
-        
+
         let action = String::from_str(&env, "action");
         let params = Bytes::from_array(&env, &[1]);
         let hash = Bytes::from_array(&env, &[0x11]);
@@ -2203,7 +2221,7 @@ mod test {
 
         // Create batch operations
         let mut operations = Vec::new(&env);
-        
+
         for i in 1..=3u32 {
             let action = String::from_str(&env, &format!("action_{}", i));
             let params = Bytes::from_array(&env, &[i as u8]);
@@ -2223,7 +2241,7 @@ mod test {
         // Execute batch as authenticated owner
         let results = client.execute_batch_best_effort(&owner, &operations);
         assert_eq!(results.len(), 3);
-        
+
         // All should succeed
         for i in 0..3u32 {
             let result = results.get(i).unwrap();
@@ -2241,7 +2259,7 @@ mod test {
 
         // Create batch operations
         let mut operations = Vec::new(&env);
-        
+
         let action = String::from_str(&env, "action");
         let params = Bytes::from_array(&env, &[1]);
         let hash = Bytes::from_array(&env, &[0x11]);
@@ -2271,7 +2289,7 @@ mod test {
 
         // Create batch with 2 operations (within limit)
         let mut operations = Vec::new(&env);
-        
+
         for i in 1..=2u32 {
             let action = String::from_str(&env, &format!("action_{}", i));
             let params = Bytes::from_array(&env, &[i as u8]);
