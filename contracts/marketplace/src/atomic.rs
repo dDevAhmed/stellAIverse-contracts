@@ -177,6 +177,25 @@ impl MarketplaceAtomicSupport {
 impl MarketplaceAtomicSupport {
     /// Execute full atomic transaction workflow
     pub fn execute_atomic_transaction(env: &Env, transaction_id: u64, steps: &Vec<TransactionStep>) -> bool {
+        // First validate the transaction structure
+        if let Err(e) = stellai_lib::atomic::AtomicTransactionUtils::validate_transaction(
+            &stellai_lib::AtomicTransaction {
+                transaction_id,
+                initiator: env.current_contract_address(),
+                steps: steps.clone(),
+                status: TransactionStatus::Initiated,
+                created_at: env.ledger().timestamp(),
+                deadline: env.ledger().timestamp() + 3600, // 1 hour deadline
+                prepared_steps: Vec::new(env),
+                executed_steps: Vec::new(env),
+                failure_reason: None,
+            }
+        ) {
+            Self::create_atomic_audit_log(env, transaction_id, None, "transaction_validation_failed", false, Some(e));
+            Self::update_transaction_state(env, transaction_id, TransactionStatus::Failed, Some(e));
+            return false;
+        }
+
         // First initialize the transaction state
         let tx_key = (Symbol::new(env, "atomic_tx"), transaction_id);
         if !env.storage().instance().has(&tx_key) {
@@ -193,33 +212,52 @@ impl MarketplaceAtomicSupport {
             env.storage().instance().set(&tx_key, &initial_state);
         }
         
+        // Resolve proper execution order based on dependencies
+        let execution_order = stellai_lib::atomic::AtomicTransactionUtils::resolve_execution_order(env, steps);
+        if execution_order.len() != steps.len() {
+            let error = "Circular dependency detected in transaction steps";
+            Self::create_atomic_audit_log(env, transaction_id, None, "transaction_validation_failed", false, Some(error));
+            Self::update_transaction_state(env, transaction_id, TransactionStatus::Failed, Some(error));
+            return false;
+        }
+        
         // Update transaction status to Preparing
         Self::update_transaction_state(env, transaction_id, TransactionStatus::Preparing, None);
         Self::create_atomic_audit_log(env, transaction_id, None, "transaction_started", true, Some("Starting atomic transaction execution"));
         
         let mut executed_steps: Vec<u32> = Vec::new(env);
         
-        // First prepare all steps in order
-        for step in steps.iter() {
-            if !Self::prepare_step(env, transaction_id, step.step_id, &step.function, &step.args, &step) {
-                // Preparation failed, trigger rollback for all executed steps
-                Self::rollback_transaction(env, transaction_id, steps, executed_steps, "Step preparation failed");
-                return false;
+        // First prepare all steps in dependency-resolved order
+         for step_id in execution_order.iter() {
+             // Find the step with this step_id
+             if let Some(step) = steps.iter().find(|s| s.step_id == step_id) {
+                 if !Self::prepare_step(env, transaction_id, step.step_id, &step.function, &step.args, &step) {
+                     // Preparation failed, trigger rollback for all executed steps
+                     Self::rollback_transaction(env, transaction_id, steps, executed_steps, "Step preparation failed");
+                     return false;
+                 }
+                 // Add the successfully prepared step to executed_steps so it can be rolled back if needed
+                 executed_steps.push_back(step.step_id);
+             }
+         }
+         
+         // Mark all steps as prepared
+         Self::update_transaction_state(env, transaction_id, TransactionStatus::Prepared, None);
+         
+         // Now commit all steps in dependency-resolved order
+         for step_id in execution_order.iter() {
+             if let Some(step) = steps.iter().find(|s| s.step_id == step_id) {
+                let result = Self::commit_step(env, transaction_id, step.step_id, &step.function, &step.args);
+                let success: bool = result.try_into_val(env).unwrap_or(false);
+                
+                if !success {
+                    // Commit failed, trigger rollback
+                    Self::rollback_transaction(env, transaction_id, steps, executed_steps, &format!("Step {} commit failed", step.step_id));
+                    return false;
+                }
+                
+                executed_steps.push_back(step.step_id);
             }
-        }
-        
-        // Now commit all steps
-        for step in steps.iter() {
-            let result = Self::commit_step(env, transaction_id, step.step_id, &step.function, &step.args);
-            let success: bool = result.try_into_val(env).unwrap_or(false);
-            
-            if !success {
-                // Commit failed, trigger rollback
-                Self::rollback_transaction(env, transaction_id, steps, executed_steps, &format!("Step {} commit failed", step.step_id));
-                return false;
-            }
-            
-            executed_steps.push_back(step.step_id);
         }
         
         // All steps completed successfully
@@ -386,7 +424,7 @@ impl AtomicTransactionSupport for MarketplaceAtomicSupport {
                 Some(log_msg.to_string().as_str())
             );
             
-            val
+            val.expect("Failed to convert value to Val")
         } else {
             Self::create_atomic_audit_log(env, transaction_id, Some(step_id), "commit_failed", false, Some("Step not found"));
             false.into()
@@ -454,69 +492,5 @@ impl AtomicTransactionSupport for MarketplaceAtomicSupport {
             Self::create_atomic_audit_log(env, transaction_id, Some(step_id), "rollback_failed", false, Some("Step not found"));
             false
         }
-    }
-}
-
-/// Add extension to MarketplaceContract to support atomic transactions
-use crate::MarketplaceContract;
-use soroban_sdk::contractimpl;
-
-#[contractimpl]
-impl MarketplaceContract {
-    /// Initialize atomic transaction support
-    pub fn initialize_atomic_support(env: Env, admin: Address) {
-        admin.require_auth();
-        // Verify admin permissions first
-        use crate::storage::is_admin;
-        assert!(is_admin(&env, &admin), "Unauthorized: must be admin");
-        
-        MarketplaceAtomicSupport::initialize(&env);
-        
-        env.events().publish(
-            (Symbol::new(&env, "atomic_support_initialized"),),
-            (admin, env.ledger().timestamp())
-        );
-    }
-
-    /// Get atomic transaction state
-    pub fn get_atomic_transaction(env: Env, transaction_id: u64) -> Option<AtomicTransactionState> {
-        let tx_key = (Symbol::new(&env, "atomic_tx"), transaction_id);
-        env.storage().instance().get(&tx_key)
-    }
-
-    /// Get atomic step state
-    pub fn get_atomic_step(env: Env, transaction_id: u64, step_id: u32) -> Option<AtomicStepState> {
-        let step_key = (Symbol::new(&env, "atomic_step"), transaction_id, step_id);
-        env.storage().instance().get(&step_key)
-    }
-
-    /// Execute an atomic transaction with full prepare/commit/rollback workflow
-    pub fn execute_atomic_transaction(env: Env, caller: Address, transaction_id: u64, steps: Vec<TransactionStep>) -> bool {
-        caller.require_auth();
-        
-        // Use the internal implementation
-        MarketplaceAtomicSupport::execute_atomic_transaction(&env, transaction_id, &steps)
-    }
-
-    /// Manually trigger rollback for a transaction (emergency use only)
-    pub fn rollback_atomic_transaction(env: Env, admin: Address, transaction_id: u64, steps: Vec<TransactionStep>, reason: String) -> bool {
-        admin.require_auth();
-        // Verify admin permissions
-        use crate::storage::is_admin;
-        assert!(is_admin(&env, &admin), "Unauthorized: must be admin");
-        
-        // Get all executed steps to rollback
-        let tx_key = (Symbol::new(&env, "atomic_tx"), transaction_id);
-        if let Some(tx_state) = env.storage().instance().get::<_, AtomicTransactionState>(&tx_key) {
-            MarketplaceAtomicSupport::rollback_transaction(&env, transaction_id, &steps, tx_state.executed_steps, reason.to_string().as_str());
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Get next available atomic transaction ID
-    pub fn get_next_atomic_transaction_id(env: Env) -> u64 {
-        MarketplaceAtomicSupport::get_next_transaction_id(&env)
     }
 }

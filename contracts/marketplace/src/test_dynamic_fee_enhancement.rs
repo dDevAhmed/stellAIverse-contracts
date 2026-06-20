@@ -2,7 +2,7 @@
 mod tests {
     use super::*;
     use crate::Marketplace;
-    use soroban_sdk::{contract, contractimpl, testutils, Address, BytesN, Env, Symbol, Vec};
+    use soroban_sdk::{contract, contractimpl, testutils::{self, Address as _, Events as _}, Address, BytesN, Env, Symbol, Vec};
 
     #[test]
     fn test_dynamic_fee_adjustment_enhancement() {

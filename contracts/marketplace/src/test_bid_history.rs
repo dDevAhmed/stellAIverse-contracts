@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use soroban_sdk::{testutils::Ledger as _, Address, Env};
+use soroban_sdk::{testutils::{Ledger as _, Address as _}, Address, Env};
 use stellai_lib::AuctionType;
 
 use crate::{Marketplace, MarketplaceClient};

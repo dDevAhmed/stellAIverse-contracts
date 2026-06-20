@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use soroban_sdk::{Address, Env, Bytes, String};
-use soroban_sdk::testutils::Ledger as _;
+use soroban_sdk::testutils::{Ledger as _, Address as _};
 use stellai_lib::AuctionType;
 
 use crate::storage::{get_sealed_commit_count, get_sealed_reveal_count, get_sealed_reveal_entry};
