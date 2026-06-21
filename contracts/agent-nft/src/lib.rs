@@ -11,8 +11,8 @@ use stellai_lib::{
     audit::{create_audit_log, OperationType},
     errors::ContractError,
     rbac,
-    storage_keys::{AGENT_COUNTER_KEY, APPROVED_MINTERS_KEY},
-    types::{Agent, OptionalRoyaltyInfo, RoyaltyInfo},
+    storage_keys::{AGENT_COUNTER_KEY, APPROVED_MINTERS_KEY, OWNERSHIP_HISTORY_KEY_PREFIX},
+    types::{Agent, OptionalRoyaltyInfo, OwnerRecord, RoyaltyInfo},
     validation, ADMIN_KEY,
 };
 
@@ -112,6 +112,23 @@ impl AgentNFT {
     /// Helper to get storage key for agent royalty info
     fn get_royalty_key(env: &Env, agent_id: u64) -> (Symbol, u64) {
         (Symbol::new(env, "royalty"), agent_id)
+    }
+
+    /// Helper to get storage key for agent ownership history
+    fn get_ownership_history_key(env: &Env, agent_id: u64) -> (Symbol, u64) {
+        (Symbol::new(env, OWNERSHIP_HISTORY_KEY_PREFIX), agent_id)
+    }
+
+    /// Append an OwnerRecord to the ownership history for an agent (append-only, no removal)
+    fn append_owner_record(env: &Env, agent_id: u64, record: OwnerRecord) {
+        let key = Self::get_ownership_history_key(env, agent_id);
+        let mut history: Vec<OwnerRecord> = env
+            .storage()
+            .instance()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(env));
+        history.push_back(record);
+        env.storage().instance().set(&key, &history);
     }
 
     /// Validate royalty fee is within acceptable bounds
@@ -262,6 +279,16 @@ impl AgentNFT {
         // Initialize lease status to false (not leased)
         Self::set_agent_lease_status(&env, agent_id_u64, false);
 
+        // Record original minter as the first ownership history entry (provenance)
+        Self::append_owner_record(
+            &env,
+            agent_id_u64,
+            OwnerRecord {
+                owner: owner.clone(),
+                acquired_at: env.ledger().timestamp(),
+            },
+        );
+
         // Emit AgentMinted event
         env.events().publish(
             (Symbol::new(&env, "agent_nft"), AgentEvent::AgentMinted),
@@ -362,6 +389,16 @@ impl AgentNFT {
 
         // Initialize lease status
         Self::set_agent_lease_status(&env, agent_id, false);
+
+        // Record original minter as the first ownership history entry (provenance)
+        Self::append_owner_record(
+            &env,
+            agent_id,
+            OwnerRecord {
+                owner: owner.clone(),
+                acquired_at: env.ledger().timestamp(),
+            },
+        );
 
         // Store royalty info if provided
         if let (Some(recipient), Some(fee)) = (royalty_recipient, royalty_fee) {
@@ -539,6 +576,16 @@ impl AgentNFT {
 
         env.storage().instance().set(&key, &agent);
 
+        // Record new owner in provenance history
+        Self::append_owner_record(
+            &env,
+            agent_id,
+            OwnerRecord {
+                owner: to.clone(),
+                acquired_at: env.ledger().timestamp(),
+            },
+        );
+
         env.events().publish(
             (Symbol::new(&env, "agent_nft"), AgentEvent::AgentTransferred),
             (agent_id, previous_owner.clone(), to.clone()),
@@ -633,6 +680,16 @@ impl AgentNFT {
             let key = Self::get_agent_key(&env, agent_id);
             env.storage().instance().set(&key, &agent);
             Self::set_agent_lease_status(&env, agent_id, false);
+
+            // Record original minter as first ownership history entry (provenance)
+            Self::append_owner_record(
+                &env,
+                agent_id,
+                OwnerRecord {
+                    owner: data.owner.clone(),
+                    acquired_at: env.ledger().timestamp(),
+                },
+            );
 
             // Handle Royalty if present
             if let OptionalRoyaltyInfo::Some(royalty) = data.royalty {
@@ -815,6 +872,34 @@ impl AgentNFT {
 
         let royalty_key = Self::get_royalty_key(&env, agent_id);
         Ok(env.storage().instance().get(&royalty_key))
+    }
+
+    /// Get the full ownership history (provenance chain) for an agent.
+    /// Records are ordered from original minter to most recent owner.
+    ///
+    /// # Arguments
+    /// * `agent_id` - The agent ID to query
+    ///
+    /// # Returns
+    /// Result<Vec<OwnerRecord>, ContractError>
+    ///
+    /// # Errors
+    /// - ContractError::InvalidAgentId if agent_id is 0
+    /// - ContractError::AgentNotFound if the agent does not exist
+    pub fn get_ownership_history(env: Env, agent_id: u64) -> Result<Vec<OwnerRecord>, ContractError> {
+        if agent_id == 0 {
+            return Err(ContractError::InvalidAgentId);
+        }
+        // Verify agent exists
+        if !Self::agent_exists(&env, agent_id) {
+            return Err(ContractError::AgentNotFound);
+        }
+        let key = Self::get_ownership_history_key(&env, agent_id);
+        Ok(env
+            .storage()
+            .instance()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(&env)))
     }
 }
 

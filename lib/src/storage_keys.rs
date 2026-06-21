@@ -12,6 +12,7 @@ pub const PROVIDER_LIST_KEY: &str = "providers";
 pub const AGENT_COUNTER_KEY: &str = "agent_counter";
 pub const AGENT_KEY_PREFIX: &str = "agent_";
 pub const AGENT_LEASE_STATUS_PREFIX: &str = "agent_lease_";
+pub const OWNERSHIP_HISTORY_KEY_PREFIX: &str = "own_hist_";
 pub const APPROVED_MINTERS_KEY: &str = "approved_minters";
 pub const IMPLEMENTATION_KEY: Symbol = symbol_short!("impl_key");
 pub const UPGRADE_HISTORY_KEY: Symbol = symbol_short!("up_hist");

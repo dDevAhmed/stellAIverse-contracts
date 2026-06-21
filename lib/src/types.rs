@@ -209,6 +209,14 @@ pub struct RoyaltyPaymentRecord {
     pub asset_class: AssetClass,
 }
 
+/// A single record in an agent's ownership history (provenance chain)
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[contracttype]
+pub struct OwnerRecord {
+    pub owner: Address,
+    pub acquired_at: u64, // ledger timestamp when this owner acquired the agent
+}
+
 /// Wrapper enum so Option<RoyaltyInfo> works inside contracttype structs
 #[derive(Clone, Debug)]
 #[contracttype]

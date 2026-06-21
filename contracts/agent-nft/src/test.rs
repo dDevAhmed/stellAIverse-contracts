@@ -478,4 +478,154 @@ mod prop_tests {
         assert_eq!(client.total_agents(), 0u64);
         assert!(client.try_get_agent(&1).is_err());
     }
+
+    // ── Ownership History / Provenance Tests (Issue #238) ───────────────────
+
+    #[test]
+    fn test_ownership_history_records_minter_on_mint() {
+        let env = Env::default();
+        let (client, admin) = setup_contract(&env);
+        let owner = Address::generate(&env);
+        client.add_approved_minter(&admin, &owner);
+        env.mock_all_auths();
+
+        mint_test_agent(&env, &client, &owner, 1, "QmProvenanceMint1", 1);
+
+        let history = client.get_ownership_history(&1);
+        assert_eq!(history.len(), 1);
+        assert_eq!(history.get(0).unwrap().owner, owner);
+    }
+
+    #[test]
+    fn test_ownership_history_grows_on_each_transfer() {
+        let env = Env::default();
+        let (client, admin) = setup_contract(&env);
+        let owner1 = Address::generate(&env);
+        let owner2 = Address::generate(&env);
+        let owner3 = Address::generate(&env);
+        client.add_approved_minter(&admin, &owner1);
+        env.mock_all_auths();
+
+        mint_test_agent(&env, &client, &owner1, 1, "QmProvenanceTransfer1", 1);
+
+        client.transfer_agent(&1, &owner1, &owner2);
+        client.transfer_agent(&1, &owner2, &owner3);
+
+        let history = client.get_ownership_history(&1);
+        // 1 (mint) + 2 transfers = 3 entries
+        assert_eq!(history.len(), 3);
+        assert_eq!(history.get(0).unwrap().owner, owner1);
+        assert_eq!(history.get(1).unwrap().owner, owner2);
+        assert_eq!(history.get(2).unwrap().owner, owner3);
+    }
+
+    #[test]
+    fn test_ownership_history_traceable_to_original_minter() {
+        let env = Env::default();
+        let (client, admin) = setup_contract(&env);
+        let minter = Address::generate(&env);
+        let buyer1 = Address::generate(&env);
+        let buyer2 = Address::generate(&env);
+        client.add_approved_minter(&admin, &minter);
+        env.mock_all_auths();
+
+        mint_test_agent(&env, &client, &minter, 1, "QmProvenance_chain", 1);
+        client.transfer_agent(&1, &minter, &buyer1);
+        client.transfer_agent(&1, &buyer1, &buyer2);
+
+        let history = client.get_ownership_history(&1);
+        // Original minter is always the first entry
+        assert_eq!(history.get(0).unwrap().owner, minter);
+        // Current owner is the last entry
+        assert_eq!(history.get(history.len() - 1).unwrap().owner, buyer2);
+    }
+
+    #[test]
+    fn test_ownership_history_not_found_for_nonexistent_agent() {
+        let env = Env::default();
+        let (client, _admin) = setup_contract(&env);
+
+        let result = client.try_get_ownership_history(&999);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ownership_history_invalid_agent_id_zero() {
+        let env = Env::default();
+        let (client, _admin) = setup_contract(&env);
+
+        let result = client.try_get_ownership_history(&0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ownership_history_records_minter_via_legacy_mint() {
+        let env = Env::default();
+        let (client, admin) = setup_contract(&env);
+        let owner = Address::generate(&env);
+        client.add_approved_minter(&admin, &owner);
+        env.mock_all_auths();
+
+        let agent_id = client.mint_agent_legacy(
+            &owner,
+            &String::from_str(&env, "LegacyAgent"),
+            &String::from_str(&env, "hash123"),
+            &Vec::new(&env),
+            &None,
+            &None,
+        );
+
+        let history = client.get_ownership_history(&agent_id);
+        assert_eq!(history.len(), 1);
+        assert_eq!(history.get(0).unwrap().owner, owner);
+    }
+
+    #[test]
+    fn test_ownership_history_records_minter_via_batch_mint() {
+        let env = Env::default();
+        let (client, admin) = setup_contract(&env);
+        env.mock_all_auths();
+        client.add_approved_minter(&admin, &admin);
+
+        let batch_owner = Address::generate(&env);
+        let data = AgentMintData {
+            owner: batch_owner.clone(),
+            name: String::from_str(&env, "BatchAgent"),
+            model_hash: String::from_str(&env, "hash"),
+            metadata_cid: String::from_str(&env, "QmBatchProvenance"),
+            capabilities: Vec::new(&env),
+            royalty: stellai_lib::types::OptionalRoyaltyInfo::None,
+        };
+        let ids = client.batch_mint(&admin, &soroban_sdk::vec![&env, data]);
+        let agent_id = ids.get(0).unwrap();
+
+        let history = client.get_ownership_history(&agent_id);
+        assert_eq!(history.len(), 1);
+        assert_eq!(history.get(0).unwrap().owner, batch_owner);
+    }
+
+    #[test]
+    fn test_ownership_history_multiple_agents_independent() {
+        let env = Env::default();
+        let (client, admin) = setup_contract(&env);
+        let owner_a = Address::generate(&env);
+        let owner_b = Address::generate(&env);
+        let new_owner_a = Address::generate(&env);
+        client.add_approved_minter(&admin, &owner_a);
+        client.add_approved_minter(&admin, &owner_b);
+        env.mock_all_auths();
+
+        mint_test_agent(&env, &client, &owner_a, 1, "QmAgentA", 1);
+        mint_test_agent(&env, &client, &owner_b, 2, "QmAgentB", 1);
+
+        client.transfer_agent(&1, &owner_a, &new_owner_a);
+
+        let history_a = client.get_ownership_history(&1);
+        let history_b = client.get_ownership_history(&2);
+
+        // Agent A has 2 entries; agent B remains at 1
+        assert_eq!(history_a.len(), 2);
+        assert_eq!(history_b.len(), 1);
+        assert_eq!(history_b.get(0).unwrap().owner, owner_b);
+    }
 }
