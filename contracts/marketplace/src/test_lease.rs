@@ -3,7 +3,9 @@
 use soroban_sdk::testutils::{Address as _, Ledger};
 use soroban_sdk::{token, Address, Env, String, Symbol};
 use stellai_lib::storage_keys::LISTING_COUNTER_KEY;
-use stellai_lib::types::{LateFeePolicy, LateFeeType, LeaseState, Listing, ListingType, PaymentFrequency};
+use stellai_lib::types::{
+    LateFeePolicy, LateFeeType, LeaseState, Listing, ListingType, PaymentFrequency,
+};
 
 use crate::{MarketplaceContract, MarketplaceContractClient};
 
@@ -27,7 +29,9 @@ fn seed_listing(env: &Env, contract_id: &Address, lessor: &Address, listing_id: 
             active: true,
             created_at: env.ledger().timestamp(),
         };
-        env.storage().instance().set(&(Symbol::new(env, "listing"), listing_id), &listing);
+        env.storage()
+            .instance()
+            .set(&(Symbol::new(env, "listing"), listing_id), &listing);
         env.storage()
             .instance()
             .set(&Symbol::new(env, LISTING_COUNTER_KEY), &listing_id);
@@ -37,7 +41,14 @@ fn seed_listing(env: &Env, contract_id: &Address, lessor: &Address, listing_id: 
 fn create_standard_lease(
     env: &Env,
     auto_renew: bool,
-) -> (MarketplaceContractClient<'_>, Address, Address, Address, Address, u64) {
+) -> (
+    MarketplaceContractClient<'_>,
+    Address,
+    Address,
+    Address,
+    Address,
+    u64,
+) {
     let (contract_id, token_address) = setup_marketplace(env);
     let client = MarketplaceContractClient::new(env, &contract_id);
     let lessor = Address::generate(env);
@@ -87,7 +98,10 @@ fn test_initiate_lease_tracks_history_and_deposit() {
 
     let history = client.get_lease_history(&lease_id);
     assert_eq!(history.len(), 1);
-    assert_eq!(history.get(0).unwrap().action, String::from_str(&env, "initiated_v2"));
+    assert_eq!(
+        history.get(0).unwrap().action,
+        String::from_str(&env, "initiated_v2")
+    );
 }
 
 #[test]
@@ -126,7 +140,8 @@ fn test_scheduler_marks_overdue_and_payment_clears_balance() {
         create_standard_lease(&env, false);
 
     let lease = client.get_lease_by_id(&lease_id).unwrap();
-    env.ledger().set_timestamp(lease.next_payment_timestamp + 3_600);
+    env.ledger()
+        .set_timestamp(lease.next_payment_timestamp + 3_600);
     client.process_due_lease(&lease_id);
 
     let overdue = client.get_lease_by_id(&lease_id).unwrap();
@@ -169,10 +184,10 @@ fn test_buy_agent_fails_on_lease_listing() {
     let client = MarketplaceContractClient::new(&env, &contract_id);
     let lessor = Address::generate(&env);
     let lessee = Address::generate(&env);
-    
+
     // Create an ACTIVE lease listing
     seed_listing(&env, &contract_id, &lessor, 1, 1000);
-    
+
     // Try to buy it
     client.buy_agent(&1, &lessee);
 }
@@ -185,13 +200,15 @@ fn test_early_termination_reconciles_penalty_and_deposit() {
         create_standard_lease(&env, false);
 
     let lease = client.get_lease_by_id(&lease_id).unwrap();
-    env.ledger().set_timestamp(lease.next_payment_timestamp + 3_600);
+    env.ledger()
+        .set_timestamp(lease.next_payment_timestamp + 3_600);
     client.process_due_lease(&lease_id);
 
     let overdue = client.get_lease_by_id(&lease_id).unwrap();
     let now = env.ledger().timestamp();
     let remaining_time = overdue.end_time - now;
-    let remaining_value = (overdue.total_value * remaining_time as i128) / overdue.duration_seconds as i128;
+    let remaining_value =
+        (overdue.total_value * remaining_time as i128) / overdue.duration_seconds as i128;
     let penalty = (remaining_value * overdue.termination_penalty_bps as i128) / 10_000;
     let required_settlement = overdue.outstanding_balance + penalty;
     let deposit_credit = if overdue.deposit_amount > required_settlement {
@@ -209,7 +226,10 @@ fn test_early_termination_reconciles_penalty_and_deposit() {
     assert_eq!(terminated.outstanding_balance, 0);
 
     let history = client.get_lease_history(&lease_id);
-    assert_eq!(history.get(history.len() - 1).unwrap().action, String::from_str(&env, "early_terminated"));
+    assert_eq!(
+        history.get(history.len() - 1).unwrap().action,
+        String::from_str(&env, "early_terminated")
+    );
 
     let client_balance = token::Client::new(&env, &token_address).balance(&contract_id);
     assert!(client_balance > 0, "Contract should hold platform fees");

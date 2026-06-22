@@ -886,7 +886,10 @@ impl AgentNFT {
     /// # Errors
     /// - ContractError::InvalidAgentId if agent_id is 0
     /// - ContractError::AgentNotFound if the agent does not exist
-    pub fn get_ownership_history(env: Env, agent_id: u64) -> Result<Vec<OwnerRecord>, ContractError> {
+    pub fn get_ownership_history(
+        env: Env,
+        agent_id: u64,
+    ) -> Result<Vec<OwnerRecord>, ContractError> {
         if agent_id == 0 {
             return Err(ContractError::InvalidAgentId);
         }

@@ -201,7 +201,8 @@ pub fn calculate_and_distribute_royalties(
 
     for i in 0..recipients.len() {
         let recipient = recipients.get(i).unwrap();
-        let share_amount = (final_royalty * (recipient.share_bps as i128)) / (total_royalty_bps as i128);
+        let share_amount =
+            (final_royalty * (recipient.share_bps as i128)) / (total_royalty_bps as i128);
         payment_recipients.push_back((
             recipient.recipient.clone(),
             share_amount,
@@ -216,11 +217,7 @@ pub fn calculate_and_distribute_royalties(
     for i in 0..payment_recipients.len() {
         let (recipient, amount, _role) = payment_recipients.get(i).unwrap();
         if amount > 0 {
-            token_client.transfer(
-                &env.current_contract_address(),
-                &recipient,
-                &amount,
-            );
+            token_client.transfer(&env.current_contract_address(), &recipient, &amount);
         }
     }
 

@@ -309,19 +309,19 @@ impl ExecutionHub {
         if !is_authorized {
             // Check for lease via Marketplace
             if let Some(marketplace) = env
-                 .storage()
-                 .instance()
-                 .get::<_, Address>(&Symbol::new(&env, MARKETPLACE_KEY))
+                .storage()
+                .instance()
+                .get::<_, Address>(&Symbol::new(&env, MARKETPLACE_KEY))
             {
                 let has_lease: bool = env.invoke_contract(
-                     &marketplace,
-                     &Symbol::new(&env, "check_lease_permission"),
-                     soroban_sdk::vec![
-                         &env,
-                         agent_id.into_val(&env),
-                         executor.clone().into_val(&env),
-                     ],
-                 );
+                    &marketplace,
+                    &Symbol::new(&env, "check_lease_permission"),
+                    soroban_sdk::vec![
+                        &env,
+                        agent_id.into_val(&env),
+                        executor.clone().into_val(&env),
+                    ],
+                );
                 if !has_lease {
                     panic!("Unauthorized: executor is not owner, operator, or active lessee");
                 }

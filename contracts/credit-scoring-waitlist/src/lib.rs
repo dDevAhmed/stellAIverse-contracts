@@ -188,7 +188,8 @@ impl CreditScoringWaitlist {
             let position_key = (Symbol::new(&env, "position"), position);
             if let Some(user) = env.storage().instance().get::<_, Address>(&position_key) {
                 let user_key = (Symbol::new(&env, "user"), user.clone());
-                if let Ok(mut entry) = env.storage().instance().get::<_, WaitlistEntry>(&user_key) {
+                if let Some(mut entry) = env.storage().instance().get::<_, WaitlistEntry>(&user_key)
+                {
                     if entry.status == WaitlistStatus::Pending {
                         // Update entry status
                         entry.status = WaitlistStatus::Notified;
@@ -360,7 +361,7 @@ impl CreditScoringWaitlist {
             let position_key = (Symbol::new(&env, "position"), position);
             if let Some(user) = env.storage().instance().get::<_, Address>(&position_key) {
                 let user_key = (Symbol::new(&env, "user"), user);
-                if let Ok(entry) = env.storage().instance().get::<_, WaitlistEntry>(&user_key) {
+                if let Some(entry) = env.storage().instance().get::<_, WaitlistEntry>(&user_key) {
                     match entry.status {
                         WaitlistStatus::Pending => stats.pending += 1,
                         WaitlistStatus::Notified => stats.notified += 1,
@@ -392,7 +393,7 @@ impl CreditScoringWaitlist {
             let position_key = (Symbol::new(&env, "position"), position);
             if let Some(user) = env.storage().instance().get::<_, Address>(&position_key) {
                 let user_key = (Symbol::new(&env, "user"), user);
-                if let Ok(entry) = env.storage().instance().get::<_, WaitlistEntry>(&user_key) {
+                if let Some(entry) = env.storage().instance().get::<_, WaitlistEntry>(&user_key) {
                     if entry.status == WaitlistStatus::Pending {
                         results.push_back(entry);
                     }
@@ -445,7 +446,7 @@ mod tests {
             auto_advance_enabled: true,
         };
 
-        let contract_id = env.register_contract(None, CreditScoringWaitlist);
+        let contract_id = env.register(CreditScoringWaitlist, ());
         let client = CreditScoringWaitlistClient::new(&env, &contract_id);
 
         client.init_contract(&admin, &config);

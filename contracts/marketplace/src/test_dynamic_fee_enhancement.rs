@@ -1,7 +1,10 @@
 #[cfg(test)]
 mod tests {
     use crate::{storage, Marketplace};
-    use soroban_sdk::{testutils::{Address as _, Events as _}, Address, Env, String};
+    use soroban_sdk::{
+        testutils::{Address as _, Events as _},
+        Address, Env, String,
+    };
 
     #[test]
     fn test_dynamic_fee_adjustment_enhancement() {

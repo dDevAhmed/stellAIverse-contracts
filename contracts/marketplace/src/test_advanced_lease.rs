@@ -4,11 +4,11 @@
 
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::testutils::Ledger;
-use soroban_sdk::{Address, Env, Symbol, token};
-use stellai_lib::types::{
-    LeaseState, Listing, ListingType, PaymentFrequency, LateFeeType, LateFeePolicy, 
-};
+use soroban_sdk::{token, Address, Env, Symbol};
 use stellai_lib::storage_keys::LISTING_COUNTER_KEY;
+use stellai_lib::types::{
+    LateFeePolicy, LateFeeType, LeaseState, Listing, ListingType, PaymentFrequency,
+};
 
 use crate::{MarketplaceContract, MarketplaceContractClient};
 
@@ -32,7 +32,7 @@ fn test_initiate_lease_v2() {
     let lessee = Address::generate(&env);
     let token_client = token::StellarAssetClient::new(&env, &token_address);
     token_client.mint(&lessee, &10_000);
-    
+
     // Create a listing
     let listing_id = 1u64;
     env.as_contract(&contract_id, || {
@@ -45,8 +45,12 @@ fn test_initiate_lease_v2() {
             active: true,
             created_at: env.ledger().timestamp(),
         };
-        env.storage().instance().set(&(Symbol::new(&env, "listing"), listing_id), &listing);
-        env.storage().instance().set(&Symbol::new(&env, LISTING_COUNTER_KEY), &listing_id);
+        env.storage()
+            .instance()
+            .set(&(Symbol::new(&env, "listing"), listing_id), &listing);
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, LISTING_COUNTER_KEY), &listing_id);
     });
 
     let late_fee_policy = LateFeePolicy {
@@ -63,7 +67,7 @@ fn test_initiate_lease_v2() {
         &PaymentFrequency::Daily,
         &100,
         &2000,
-        &late_fee_policy
+        &late_fee_policy,
     );
 
     let lease = client.get_lease_by_id(&lease_id).unwrap();
@@ -85,7 +89,7 @@ fn test_process_lease_payment_with_late_fees() {
 
     let lessor = Address::generate(&env);
     let lessee = Address::generate(&env);
-    
+
     token_client.mint(&lessee, &10000);
 
     // Create listing and lease
@@ -100,8 +104,12 @@ fn test_process_lease_payment_with_late_fees() {
             active: true,
             created_at: env.ledger().timestamp(),
         };
-        env.storage().instance().set(&(Symbol::new(&env, "listing"), listing_id), &listing);
-        env.storage().instance().set(&Symbol::new(&env, LISTING_COUNTER_KEY), &listing_id);
+        env.storage()
+            .instance()
+            .set(&(Symbol::new(&env, "listing"), listing_id), &listing);
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, LISTING_COUNTER_KEY), &listing_id);
     });
 
     let late_fee_policy = LateFeePolicy {
@@ -118,13 +126,13 @@ fn test_process_lease_payment_with_late_fees() {
         &PaymentFrequency::Daily,
         &100,
         &2000,
-        &late_fee_policy
+        &late_fee_policy,
     );
 
     // Advance time to 1 hour after due date
     let lease = client.get_lease_by_id(&lease_id).unwrap();
     let due_date = lease.next_payment_timestamp;
-    env.ledger().set_timestamp(due_date + 3600); 
+    env.ledger().set_timestamp(due_date + 3600);
 
     client.process_lease_payment(&lease_id, &lessee);
 
@@ -149,7 +157,7 @@ fn test_auto_renew_lease_v2() {
     let lessor = Address::generate(&env);
     let lessee = Address::generate(&env);
     token_client.mint(&lessee, &10_000);
-    
+
     let listing_id = 1u64;
     env.as_contract(&contract_id, || {
         let listing = Listing {
@@ -161,8 +169,12 @@ fn test_auto_renew_lease_v2() {
             active: true,
             created_at: env.ledger().timestamp(),
         };
-        env.storage().instance().set(&(Symbol::new(&env, "listing"), listing_id), &listing);
-        env.storage().instance().set(&Symbol::new(&env, LISTING_COUNTER_KEY), &listing_id);
+        env.storage()
+            .instance()
+            .set(&(Symbol::new(&env, "listing"), listing_id), &listing);
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, LISTING_COUNTER_KEY), &listing_id);
     });
 
     let lease_id = client.initiate_lease_v2(
@@ -174,14 +186,17 @@ fn test_auto_renew_lease_v2() {
         &PaymentFrequency::Daily,
         &100,
         &2000,
-        &LateFeePolicy { fee_type: LateFeeType::None, value: 0 }
+        &LateFeePolicy {
+            fee_type: LateFeeType::None,
+            value: 0,
+        },
     );
 
     let lease = client.get_lease_by_id(&lease_id).unwrap();
     let end_time = lease.end_time;
-    
+
     env.ledger().set_timestamp(end_time);
-    
+
     client.auto_renew_lease_v2(&lease_id);
 
     let renewed_lease = client.get_lease_by_id(&lease_id).unwrap();

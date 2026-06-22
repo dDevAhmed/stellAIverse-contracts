@@ -167,8 +167,8 @@ pub struct RoyaltyRecipient {
 #[contracttype]
 pub struct RoyaltyConfig {
     pub recipients: Vec<RoyaltyRecipient>,
-    pub total_bps: u32, // Total basis points (should equal sum of shares)
-    pub min_threshold: i128, // Minimum sale price to trigger royalties
+    pub total_bps: u32,        // Total basis points (should equal sum of shares)
+    pub min_threshold: i128,   // Minimum sale price to trigger royalties
     pub max_cap: Option<i128>, // Optional maximum royalty amount
 }
 

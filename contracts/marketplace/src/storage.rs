@@ -75,7 +75,7 @@ pub enum DataKey {
     LeaseNotificationCounter,
     LeaseNotification(u64),
     LeaseNotificationIndex(u64, u64), // (lease_id, history_index)
-    EscrowConfig, // Auto-release period and other escrow settings
+    EscrowConfig,                     // Auto-release period and other escrow settings
     EscrowCounter,
     Escrow(u64),                 // Individual escrow entry by ID
     BuyerEscrows(Address, u64),  // (buyer address, escrow_id)
@@ -764,9 +764,10 @@ pub fn add_lease_history(env: &Env, lease_id: u64, history: &stellai_lib::LeaseH
     env.storage()
         .instance()
         .set(&DataKey::LeaseHistory(lease_id, history_index), history);
-    env.storage()
-        .instance()
-        .set(&(Symbol::new(env, "lhist_cnt"), lease_id), &(history_index + 1));
+    env.storage().instance().set(
+        &(Symbol::new(env, "lhist_cnt"), lease_id),
+        &(history_index + 1),
+    );
 }
 
 pub fn get_lease_history_count(env: &Env, lease_id: u64) -> u64 {
@@ -800,22 +801,27 @@ pub fn increment_lease_notification_counter(env: &Env) -> u64 {
 }
 
 pub fn set_lease_notification(env: &Env, notification: &stellai_lib::LeaseNotification) {
-    env.storage()
-        .instance()
-        .set(&DataKey::LeaseNotification(notification.notification_id), notification);
+    env.storage().instance().set(
+        &DataKey::LeaseNotification(notification.notification_id),
+        notification,
+    );
 }
 
 pub fn add_lease_notification_index(env: &Env, lease_id: u64, notification_id: u64) {
     let index = get_lease_notification_count(env, lease_id);
-    env.storage()
-        .instance()
-        .set(&DataKey::LeaseNotificationIndex(lease_id, index), &notification_id);
+    env.storage().instance().set(
+        &DataKey::LeaseNotificationIndex(lease_id, index),
+        &notification_id,
+    );
     env.storage()
         .instance()
         .set(&(Symbol::new(env, "lnot_cnt"), lease_id), &(index + 1));
 }
 
-pub fn get_lease_notification(env: &Env, notification_id: u64) -> Option<stellai_lib::LeaseNotification> {
+pub fn get_lease_notification(
+    env: &Env,
+    notification_id: u64,
+) -> Option<stellai_lib::LeaseNotification> {
     env.storage()
         .instance()
         .get(&DataKey::LeaseNotification(notification_id))
@@ -994,7 +1000,7 @@ pub fn get_default_asset_class_settings(
             default_royalty_bps: 500, // 5%
             min_royalty_bps: 0,
             max_royalty_bps: 2500, // 25%
-            min_threshold: 1000, // Minimum sale price to trigger royalties
+            min_threshold: 1000,   // Minimum sale price to trigger royalties
         },
         stellai_lib::AssetClass::Model => stellai_lib::AssetClassRoyaltySettings {
             asset_class: stellai_lib::AssetClass::Model,
@@ -1061,9 +1067,10 @@ pub fn get_royalty_payment_record(
 /// Add royalty payment to history
 pub fn add_royalty_payment_history(env: &Env, agent_id: u64, payment_id: u64) {
     let index = get_royalty_payment_history_count(env, agent_id);
-    env.storage()
-        .instance()
-        .set(&DataKey::RoyaltyPaymentHistory(agent_id, index), &payment_id);
+    env.storage().instance().set(
+        &DataKey::RoyaltyPaymentHistory(agent_id, index),
+        &payment_id,
+    );
 }
 
 /// Get royalty payment history count for an agent

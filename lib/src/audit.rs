@@ -279,11 +279,15 @@ pub fn export_audit_logs(
                 OperationType::AuctionCreated => String::from_str(env, "AuctionCreated"),
                 OperationType::AuctionBidPlaced => String::from_str(env, "AuctionBidPlaced"),
                 OperationType::AuctionEnded => String::from_str(env, "AuctionEnded"),
-                OperationType::LeaseExtensionRequested => String::from_str(env, "LeaseExtensionRequested"),
+                OperationType::LeaseExtensionRequested => {
+                    String::from_str(env, "LeaseExtensionRequested")
+                }
                 OperationType::LeaseExtended => String::from_str(env, "LeaseExtended"),
                 OperationType::LeaseRenewed => String::from_str(env, "LeaseRenewed"),
                 OperationType::LeaseOverdue => String::from_str(env, "LeaseOverdue"),
-                OperationType::LeasePaymentProcessed => String::from_str(env, "LeasePaymentProcessed"),
+                OperationType::LeasePaymentProcessed => {
+                    String::from_str(env, "LeasePaymentProcessed")
+                }
                 OperationType::AuthFailure => String::from_str(env, "AuthFailure"),
                 OperationType::PermissionCheck => String::from_str(env, "PermissionCheck"),
                 OperationType::UnauthorizedAttempt => String::from_str(env, "UnauthorizedAttempt"),

@@ -1,6 +1,9 @@
 #![cfg(test)]
 
-use soroban_sdk::{testutils::{Ledger as _, Address as _}, token, Address, Env};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger as _},
+    token, Address, Env,
+};
 use stellai_lib::AuctionType;
 
 use crate::{Marketplace, MarketplaceClient};
@@ -20,13 +23,13 @@ fn setup() -> (Env, MarketplaceClient<'static>, Address) {
 
 fn create_english_auction(env: &Env, client: &MarketplaceClient, seller: &Address) -> u64 {
     client.create_auction(
-        &1u64,          // agent_id
+        &1u64, // agent_id
         seller,
         &AuctionType::English,
-        &1_000i128,     // start_price
-        &500i128,       // reserve_price
-        &3_600u64,      // duration (1 hour)
-        &0u32,          // min_bid_increment_bps (no enforced minimum)
+        &1_000i128, // start_price
+        &500i128,   // reserve_price
+        &3_600u64,  // duration (1 hour)
+        &0u32,      // min_bid_increment_bps (no enforced minimum)
     )
 }
 

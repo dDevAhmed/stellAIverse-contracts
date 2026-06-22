@@ -1,18 +1,18 @@
 #![no_std]
-pub mod types;
 pub mod atomic;
 pub mod payment_types;
 pub mod payments;
+pub mod types;
 
 #[cfg(test)]
 mod prop_tests;
 mod storage;
 #[cfg(test)]
+mod test_advanced_lease;
+#[cfg(test)]
 mod test_bid_history;
 #[cfg(test)]
 mod test_dynamic_fee_enhancement;
-#[cfg(test)]
-mod test_advanced_lease;
 #[cfg(test)]
 mod test_lease;
 
@@ -20,12 +20,12 @@ use crate::types::{MarketplaceCircuitBreaker, PricingRule};
 use payment_types::PaymentRecord;
 use payments::{
     calculate_and_distribute_royalties, calculate_splits, execute_payment_routing,
-    PaymentRoutingContext, validate_royalty_config,
+    validate_royalty_config, PaymentRoutingContext,
 };
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
-    contract, contractimpl, token, Address, Bytes, BytesN, Env, IntoVal, Map, String, Symbol,
-    TryIntoVal, Val, Vec, symbol_short, vec,
+    contract, contractimpl, symbol_short, token, vec, Address, Bytes, BytesN, Env, IntoVal, Map,
+    String, Symbol, TryIntoVal, Val, Vec,
 };
 use stellai_lib::{
     audit::{create_audit_log, OperationType},
@@ -33,13 +33,12 @@ use stellai_lib::{
     rbac,
     storage_keys::LISTING_COUNTER_KEY,
     types::{
-        Approval, ApprovalConfig, ApprovalHistory, ApprovalStatus, Auction, AuctionStatus,
-        AuctionType, BidRecord, LeaseData, LeaseExtensionRequest, LeaseHistoryEntry, LeaseState,
-        LeaseNotification, LeaseNotificationChannel, Listing, ListingType, RoyaltyInfo,
-        TransactionStep, TransactionStatus, PaymentFrequency, LateFeeType, LateFeePolicy,
-        RenewalPolicy,
-        AssetClass, RoyaltyRecipient, RoyaltyConfig, RoyaltyPaymentRecord,
-        OracleData, AssetClassRoyaltySettings,
+        Approval, ApprovalConfig, ApprovalHistory, ApprovalStatus, AssetClass,
+        AssetClassRoyaltySettings, Auction, AuctionStatus, AuctionType, BidRecord, LateFeePolicy,
+        LateFeeType, LeaseData, LeaseExtensionRequest, LeaseHistoryEntry, LeaseNotification,
+        LeaseNotificationChannel, LeaseState, Listing, ListingType, OracleData, PaymentFrequency,
+        RenewalPolicy, RoyaltyConfig, RoyaltyInfo, RoyaltyPaymentRecord, RoyaltyRecipient,
+        TransactionStatus, TransactionStep,
     },
     validation,
 };
@@ -51,7 +50,7 @@ pub struct MarketplaceContract;
 pub use MarketplaceContract as Marketplace;
 pub use MarketplaceContractClient as MarketplaceClient;
 
-const DATA_EXPIRATION_WINDOW_SECONDS: u64 = 3600; 
+const DATA_EXPIRATION_WINDOW_SECONDS: u64 = 3600;
 const BPS_DENOMINATOR: u128 = 10_000;
 
 #[contractimpl]
@@ -61,24 +60,34 @@ impl MarketplaceContract {
         if env.storage().instance().has(&DataKey::Admin) {
             panic!("Contract already initialized");
         }
-        
+
         admin.require_auth();
         set_admin(&env, &admin);
         set_payment_token(&env, payment_token.clone());
         set_platform_fee(&env, platform_fee_bps);
-        
+
         // Initialize atomic transaction support
         crate::atomic::MarketplaceAtomicSupport::initialize(&env);
-        
-        env.events().publish((symbol_short!("init"),), (admin, payment_token, platform_fee_bps));
+
+        env.events().publish(
+            (symbol_short!("init"),),
+            (admin, payment_token, platform_fee_bps),
+        );
     }
 
     pub fn authorize_oracle(env: Env, admin: Address, oracle: Address) {
         admin.require_auth();
-        env.storage().instance().set(&Symbol::new(&env, "oracle"), &oracle);
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "oracle"), &oracle);
     }
 
-    pub fn set_circuit_breaker(env: Env, admin: Address, status: MarketplaceCircuitBreaker, fee_bps: u32) {
+    pub fn set_circuit_breaker(
+        env: Env,
+        admin: Address,
+        status: MarketplaceCircuitBreaker,
+        fee_bps: u32,
+    ) {
         admin.require_auth();
         assert!(fee_bps <= 5000, "Platform fee cannot exceed 50%");
         Self::verify_admin(&env, &admin);
@@ -118,18 +127,33 @@ impl MarketplaceContract {
         crate::atomic::MarketplaceAtomicSupport::get_next_transaction_id(&env)
     }
 
-    pub fn try_execute_atomic_transaction(env: Env, initiator: Address, steps: Vec<TransactionStep>) -> bool {
+    pub fn try_execute_atomic_transaction(
+        env: Env,
+        initiator: Address,
+        steps: Vec<TransactionStep>,
+    ) -> bool {
         initiator.require_auth();
         let transaction_id = Self::get_next_atomic_transaction_id(env.clone());
-        crate::atomic::MarketplaceAtomicSupport::execute_atomic_transaction(&env, transaction_id, &steps)
+        crate::atomic::MarketplaceAtomicSupport::execute_atomic_transaction(
+            &env,
+            transaction_id,
+            &steps,
+        )
     }
 
-    pub fn get_atomic_transaction(env: Env, transaction_id: u64) -> Option<crate::atomic::AtomicTransactionState> {
+    pub fn get_atomic_transaction(
+        env: Env,
+        transaction_id: u64,
+    ) -> Option<crate::atomic::AtomicTransactionState> {
         let tx_key = (Symbol::new(&env, "atomic_tx"), transaction_id);
         env.storage().instance().get(&tx_key)
     }
 
-    pub fn get_atomic_step_state(env: Env, transaction_id: u64, step_id: u32) -> Option<crate::atomic::AtomicStepState> {
+    pub fn get_atomic_step_state(
+        env: Env,
+        transaction_id: u64,
+        step_id: u32,
+    ) -> Option<crate::atomic::AtomicStepState> {
         let step_key = (Symbol::new(&env, "atomic_step"), transaction_id, step_id);
         env.storage().instance().get(&step_key)
     }
@@ -263,7 +287,9 @@ impl MarketplaceContract {
         }
 
         if listing.listing_type != ListingType::Sale {
-            panic!("Listing is not for sale. Use initiate_lease() for leases or bid() for auctions.");
+            panic!(
+                "Listing is not for sale. Use initiate_lease() for leases or bid() for auctions."
+            );
         }
 
         if listing.price >= approval_config.threshold {
@@ -362,11 +388,7 @@ impl MarketplaceContract {
 
             if let Some(info) = royalty_info {
                 rate = info.fee;
-                recipients.push_back((
-                    info.recipient,
-                    rate,
-                    String::from_str(env, "creator"),
-                ));
+                recipients.push_back((info.recipient, rate, String::from_str(env, "creator")));
             }
             (recipients, rate)
         };
@@ -502,8 +524,7 @@ impl MarketplaceContract {
         };
 
         // Validate configuration
-        validate_royalty_config(&config, asset_class, &env)
-            .expect("Invalid royalty configuration");
+        validate_royalty_config(&config, asset_class, &env).expect("Invalid royalty configuration");
 
         storage::set_royalty_config(&env, agent_id, &config);
 
@@ -570,7 +591,8 @@ impl MarketplaceContract {
         let count = storage::get_royalty_payment_history_count(&env, agent_id);
 
         for i in 0..count {
-            if let Some(payment_id) = storage::get_royalty_payment_history_entry(&env, agent_id, i) {
+            if let Some(payment_id) = storage::get_royalty_payment_history_entry(&env, agent_id, i)
+            {
                 if let Some(record) = storage::get_royalty_payment_record(&env, payment_id) {
                     history.push_back(record);
                 }
@@ -1104,19 +1126,23 @@ impl MarketplaceContract {
     }
 
     pub fn verify_and_get_oracle_value(
-        env: Env, 
-        oracle_data: OracleData, 
-        _signature: BytesN<64>
+        env: Env,
+        oracle_data: OracleData,
+        _signature: BytesN<64>,
     ) -> u128 {
-        let breaker: MarketplaceCircuitBreaker = env.storage().instance()
+        let breaker: MarketplaceCircuitBreaker = env
+            .storage()
+            .instance()
             .get(&Symbol::new(&env, "breaker"))
             .unwrap_or(MarketplaceCircuitBreaker::Active);
-            
+
         if let MarketplaceCircuitBreaker::Terminated = breaker {
             panic!("Marketplace core operations are locked via circuit breaker");
         }
 
-        let authorized_oracle: Address = env.storage().instance()
+        let authorized_oracle: Address = env
+            .storage()
+            .instance()
             .get(&Symbol::new(&env, "oracle"))
             .unwrap_or_else(|| panic!("Oracle reference not configured"));
 
@@ -1137,9 +1163,9 @@ impl MarketplaceContract {
     }
 
     pub fn calculate_dynamic_price(
-        _env: Env, 
-        rule: PricingRule, 
-        verified_metric_value: u128
+        _env: Env,
+        rule: PricingRule,
+        verified_metric_value: u128,
     ) -> u128 {
         if verified_metric_value == 0 {
             return rule.base_price;
@@ -1147,7 +1173,8 @@ impl MarketplaceContract {
 
         let adjustment = verified_metric_value
             .checked_mul(rule.scale_factor_bps as u128)
-            .unwrap_or(0) / BPS_DENOMINATOR;
+            .unwrap_or(0)
+            / BPS_DENOMINATOR;
 
         if rule.inverse {
             rule.base_price.checked_sub(adjustment).unwrap_or(0)
@@ -1160,90 +1187,94 @@ impl MarketplaceContract {
     pub fn place_bid(env: Env, auction_id: u64, bidder: Address, amount: i128) {
         bidder.require_auth();
         let mut auction = get_auction(&env, auction_id).expect("Auction not found");
-        assert!(auction.status == AuctionStatus::Active, "Auction not active");
+        assert!(
+            auction.status == AuctionStatus::Active,
+            "Auction not active"
+        );
         assert!(
             env.ledger().timestamp() < auction.end_time,
             "Auction has ended"
         );
 
-        let computed_min_step = (auction.start_price * (auction.min_bid_increment_bps as i128)) / 10_000;
-         let min_bid = if auction.highest_bid > 0 {
-             auction.highest_bid + computed_min_step
-         } else {
-             // No bids yet: require at least the start price (or start price + min step)
-             let baseline = auction.start_price;
-             if baseline > computed_min_step {
-                 baseline
-             } else {
-                 computed_min_step
-             }
-         };
+        let computed_min_step =
+            (auction.start_price * (auction.min_bid_increment_bps as i128)) / 10_000;
+        let min_bid = if auction.highest_bid > 0 {
+            auction.highest_bid + computed_min_step
+        } else {
+            // No bids yet: require at least the start price (or start price + min step)
+            let baseline = auction.start_price;
+            if baseline > computed_min_step {
+                baseline
+            } else {
+                computed_min_step
+            }
+        };
 
-         assert!(amount >= min_bid, "Bid too low");
+        assert!(amount >= min_bid, "Bid too low");
 
-         let token_client = token::Client::new(&env, &get_payment_token(&env));
+        let token_client = token::Client::new(&env, &get_payment_token(&env));
 
-         // Refund previous highest bidder
-         if let Some(prev_bidder) = auction.highest_bidder {
-             token_client.transfer(
-                 &env.current_contract_address(),
-                 &prev_bidder,
-                 &auction.highest_bid,
-             );
-         }
+        // Refund previous highest bidder
+        if let Some(prev_bidder) = auction.highest_bidder {
+            token_client.transfer(
+                &env.current_contract_address(),
+                &prev_bidder,
+                &auction.highest_bid,
+            );
+        }
 
-         // Lock new bid in contract
-         token_client.transfer(&bidder, &env.current_contract_address(), &amount);
+        // Lock new bid in contract
+        token_client.transfer(&bidder, &env.current_contract_address(), &amount);
 
-         // Capture previous bid before overwriting for increment calculation
-         let prev_highest = auction.highest_bid;
-         let bid_increment = amount - prev_highest;
+        // Capture previous bid before overwriting for increment calculation
+        let prev_highest = auction.highest_bid;
+        let bid_increment = amount - prev_highest;
 
-         auction.highest_bidder = Some(bidder.clone());
-         auction.highest_bid = amount;
+        auction.highest_bidder = Some(bidder.clone());
+        auction.highest_bid = amount;
 
-         // Extend auction by 5 minutes if bid in final 5 minutes
-         let time_left = auction.end_time - env.ledger().timestamp();
-         if time_left < 300 {
-             auction.end_time += 300;
-         }
+        // Extend auction by 5 minutes if bid in final 5 minutes
+        let time_left = auction.end_time - env.ledger().timestamp();
+        if time_left < 300 {
+            auction.end_time += 300;
+        }
 
-         set_auction(&env, &auction);
+        set_auction(&env, &auction);
 
-         // Record bid in history with sequence and increment
-         let sequence = get_bid_history_count(&env, auction_id) + 1;
-         add_bid_history(
-             &env,
-             auction_id,
-             &BidRecord {
-                 bidder: bidder.clone(),
-                 amount,
-                 timestamp: env.ledger().timestamp(),
-                 bid_increment,
-                 sequence,
-             },
-         );
+        // Record bid in history with sequence and increment
+        let sequence = get_bid_history_count(&env, auction_id) + 1;
+        add_bid_history(
+            &env,
+            auction_id,
+            &BidRecord {
+                bidder: bidder.clone(),
+                amount,
+                timestamp: env.ledger().timestamp(),
+                bid_increment,
+                sequence,
+            },
+        );
 
-         env.events().publish(
-             (Symbol::new(&env, "BidPlaced"),),
-             (auction_id, bidder.clone(), amount, auction.end_time),
-         );
+        env.events().publish(
+            (Symbol::new(&env, "BidPlaced"),),
+            (auction_id, bidder.clone(), amount, auction.end_time),
+        );
 
-         // Audit log for bid placement
-         let before_state = String::from_str(&env, "{\"bid_placed\":false}");
-         let after_state = String::from_str(&env, "{\"bid_placed\":true}");
-         let tx_hash = String::from_str(&env, "place_bid");
-         let description = Some(String::from_str(&env, "Auction bid placed"));
+        // Audit log for bid placement
+        let before_state = String::from_str(&env, "{\"bid_placed\":false}");
+        let after_state = String::from_str(&env, "{\"bid_placed\":true}");
+        let tx_hash = String::from_str(&env, "place_bid");
+        let description = Some(String::from_str(&env, "Auction bid placed"));
 
-         let _ = create_audit_log(
-             &env,
-             bidder.clone(),
-             OperationType::AuctionBidPlaced,
-             before_state,
-             after_state,
-             tx_hash,
-             description,
-         );
+        let _ = create_audit_log(
+            &env,
+            bidder.clone(),
+            OperationType::AuctionBidPlaced,
+            before_state,
+            after_state,
+            tx_hash,
+            description,
+        );
     }
 
     /// Returns the number of bids placed in an auction.
@@ -2562,7 +2593,10 @@ impl MarketplaceContract {
             LeaseState::ExtensionRequested,
             &lessee,
             "extension_requested",
-            Some(String::from_str(&env, "Lessee requested more time on the lease")),
+            Some(String::from_str(
+                &env,
+                "Lessee requested more time on the lease",
+            )),
             Some(String::from_str(&env, "extension_request_created")),
         );
         storage::set_lease(&env, &lease);
@@ -2619,7 +2653,10 @@ impl MarketplaceContract {
             LeaseState::Active,
             &lessor,
             "extension_approved",
-            Some(String::from_str(&env, "Lessor approved the extension request")),
+            Some(String::from_str(
+                &env,
+                "Lessor approved the extension request",
+            )),
             Some(String::from_str(&env, "extension_approved")),
         );
 
@@ -2736,8 +2773,14 @@ impl MarketplaceContract {
             LeaseState::Terminated,
             &lessee,
             "early_terminated",
-            Some(String::from_str(&env, "Lease terminated before scheduled expiry")),
-            Some(String::from_str(&env, "termination_reconciliation_complete")),
+            Some(String::from_str(
+                &env,
+                "Lease terminated before scheduled expiry",
+            )),
+            Some(String::from_str(
+                &env,
+                "termination_reconciliation_complete",
+            )),
         );
         storage::set_lease(&env, &lease);
 
@@ -2833,7 +2876,8 @@ impl MarketplaceContract {
         let count = storage::get_lease_notification_count(&env, lease_id);
         let mut notifications = Vec::new(&env);
         for i in 0..count {
-            if let Some(notification_id) = storage::get_lease_notification_index(&env, lease_id, i) {
+            if let Some(notification_id) = storage::get_lease_notification_index(&env, lease_id, i)
+            {
                 if let Some(notification) = storage::get_lease_notification(&env, notification_id) {
                     notifications.push_back(notification);
                 }
@@ -3417,7 +3461,13 @@ impl MarketplaceContract {
 
         env.events().publish(
             (Symbol::new(env, "LeaseNotificationQueued"),),
-            (lease.lease_id, notification_id, channel as u32, recipient.clone(), message),
+            (
+                lease.lease_id,
+                notification_id,
+                channel as u32,
+                recipient.clone(),
+                message,
+            ),
         );
     }
 
@@ -3466,12 +3516,8 @@ impl MarketplaceContract {
         let mut missed_cycles = 0u32;
 
         while due_at <= now && due_at < lease.end_time {
-            let (cycle_total, cycle_late_fee) = Self::calculate_payment_amount(
-                lease.payment_amount,
-                now,
-                due_at,
-                &late_fee_policy,
-            );
+            let (cycle_total, cycle_late_fee) =
+                Self::calculate_payment_amount(lease.payment_amount, now, due_at, &late_fee_policy);
             outstanding_added += cycle_total;
             late_fees_added += cycle_late_fee;
             missed_cycles += 1;
@@ -3563,30 +3609,30 @@ impl MarketplaceContract {
         }
 
         match (lease.status, new_state) {
-            (LeaseState::None, LeaseState::Active) => {},
-            (LeaseState::Pending, LeaseState::Active) => {},
-            (LeaseState::Active, LeaseState::ExtensionRequested) => {},
-            (LeaseState::Active, LeaseState::Overdue) => {},
-            (LeaseState::Active, LeaseState::PendingRenewal) => {},
-            (LeaseState::Active, LeaseState::Renewed) => {},
-            (LeaseState::Active, LeaseState::Terminated) => {},
-            (LeaseState::Active, LeaseState::Expired) => {},
-            (LeaseState::Renewed, LeaseState::Active) => {},
-            (LeaseState::Renewed, LeaseState::Overdue) => {},
-            (LeaseState::Renewed, LeaseState::PendingRenewal) => {},
-            (LeaseState::Renewed, LeaseState::Terminated) => {},
-            (LeaseState::Renewed, LeaseState::Expired) => {},
-            (LeaseState::ExtensionRequested, LeaseState::Active) => {},
-            (LeaseState::ExtensionRequested, LeaseState::Terminated) => {},
-            (LeaseState::Overdue, LeaseState::Active) => {},
-            (LeaseState::Overdue, LeaseState::PendingRenewal) => {},
-            (LeaseState::Overdue, LeaseState::Renewed) => {},
-            (LeaseState::Overdue, LeaseState::Terminated) => {},
-            (LeaseState::Overdue, LeaseState::Expired) => {},
-            (LeaseState::PendingRenewal, LeaseState::Active) => {},
-            (LeaseState::PendingRenewal, LeaseState::Renewed) => {},
-            (LeaseState::PendingRenewal, LeaseState::Terminated) => {},
-            (LeaseState::PendingRenewal, LeaseState::Expired) => {},
+            (LeaseState::None, LeaseState::Active) => {}
+            (LeaseState::Pending, LeaseState::Active) => {}
+            (LeaseState::Active, LeaseState::ExtensionRequested) => {}
+            (LeaseState::Active, LeaseState::Overdue) => {}
+            (LeaseState::Active, LeaseState::PendingRenewal) => {}
+            (LeaseState::Active, LeaseState::Renewed) => {}
+            (LeaseState::Active, LeaseState::Terminated) => {}
+            (LeaseState::Active, LeaseState::Expired) => {}
+            (LeaseState::Renewed, LeaseState::Active) => {}
+            (LeaseState::Renewed, LeaseState::Overdue) => {}
+            (LeaseState::Renewed, LeaseState::PendingRenewal) => {}
+            (LeaseState::Renewed, LeaseState::Terminated) => {}
+            (LeaseState::Renewed, LeaseState::Expired) => {}
+            (LeaseState::ExtensionRequested, LeaseState::Active) => {}
+            (LeaseState::ExtensionRequested, LeaseState::Terminated) => {}
+            (LeaseState::Overdue, LeaseState::Active) => {}
+            (LeaseState::Overdue, LeaseState::PendingRenewal) => {}
+            (LeaseState::Overdue, LeaseState::Renewed) => {}
+            (LeaseState::Overdue, LeaseState::Terminated) => {}
+            (LeaseState::Overdue, LeaseState::Expired) => {}
+            (LeaseState::PendingRenewal, LeaseState::Active) => {}
+            (LeaseState::PendingRenewal, LeaseState::Renewed) => {}
+            (LeaseState::PendingRenewal, LeaseState::Terminated) => {}
+            (LeaseState::PendingRenewal, LeaseState::Expired) => {}
             _ => panic!("Invalid state transition"),
         }
 
@@ -3614,7 +3660,10 @@ impl MarketplaceContract {
             LeaseState::Overdue,
             &actor,
             "marked_overdue",
-            Some(String::from_str(&env, "Lease payment obligation is overdue")),
+            Some(String::from_str(
+                &env,
+                "Lease payment obligation is overdue",
+            )),
             Some(String::from_str(&env, "manual_overdue_mark")),
         );
         storage::set_lease(&env, &lease);
@@ -3766,7 +3815,10 @@ impl MarketplaceContract {
             lease_id,
             &lessee,
             "initiated_v2",
-            Some(String::from_str(&env, "lease_created_with_financial_schedule")),
+            Some(String::from_str(
+                &env,
+                "lease_created_with_financial_schedule",
+            )),
             Some(String::from_str(&env, "Lease created and deposit reserved")),
             LeaseState::None,
             LeaseState::Active,
@@ -3793,7 +3845,10 @@ impl MarketplaceContract {
 
         let mut lease = storage::get_lease(&env, lease_id).expect("Lease not found");
         assert!(lease.lessee == payer, "Only lessee can pay");
-        assert!(Self::is_live_lease_state(lease.status), "Lease is not active");
+        assert!(
+            Self::is_live_lease_state(lease.status),
+            "Lease is not active"
+        );
 
         Self::sync_due_payments(&env, &mut lease);
 
@@ -3850,7 +3905,10 @@ impl MarketplaceContract {
                 LeaseState::Active,
                 &actor,
                 "payment_processed",
-                Some(String::from_str(&env, "Outstanding lease balance collected")),
+                Some(String::from_str(
+                    &env,
+                    "Outstanding lease balance collected",
+                )),
                 Some(String::from_str(&env, "payment_cleared")),
             );
         } else {
@@ -3925,7 +3983,10 @@ impl MarketplaceContract {
                 LeaseState::Expired,
                 &actor,
                 "expired",
-                Some(String::from_str(&env, "Lease reached scheduled expiry without renewal")),
+                Some(String::from_str(
+                    &env,
+                    "Lease reached scheduled expiry without renewal",
+                )),
                 Some(String::from_str(&env, "lease_expired")),
             );
         }
@@ -3957,7 +4018,10 @@ impl MarketplaceContract {
 
         assert!(now >= lease.end_time, "Lease not yet expired");
         assert!(lease.auto_renew, "Auto-renew not enabled");
-        assert!(lease.lessee_consent_for_renewal, "Lessee consent not provided");
+        assert!(
+            lease.lessee_consent_for_renewal,
+            "Lessee consent not provided"
+        );
         assert!(
             lease.max_renewals == 0 || lease.current_renewal_count < lease.max_renewals,
             "Max renewals reached"
