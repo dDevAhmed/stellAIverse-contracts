@@ -580,6 +580,11 @@ impl ComplianceIntegrationContract {
         Ok(())
     }
 
+    /// Retrieve a KYC record for a subject
+    pub fn kyc_get(env: Env, subject: Address) -> Result<KycRecord, Error> {
+        Self::get_kyc_record(&env, &subject)
+    }
+
     /// Check if a subject has verified KYC status
     pub fn kyc_is_verified(env: Env, subject: Address) -> bool {
         match Self::get_kyc_record(&env, &subject) {
