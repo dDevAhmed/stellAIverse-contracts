@@ -1,4 +1,4 @@
-#![no_std]
+﻿#![no_std]
 pub mod types;
 pub mod atomic;
 
@@ -9,6 +9,8 @@ mod storage;
 mod test_bid_history;
 #[cfg(test)]
 mod test_dynamic_fee_enhancement;
+#[cfg(test)]
+mod test_amm_integration;
 
 use payment_types::PaymentRecord;
 use payments::{
@@ -104,7 +106,7 @@ impl MarketplaceContract {
         env.storage().instance().get(&step_key)
     }
 
-    /// Internal: verify caller is the stored admin — always re-reads from storage (Issue #152)
+    /// Internal: verify caller is the stored admin â€” always re-reads from storage (Issue #152)
     fn verify_admin(env: &Env, caller: &Address) {
         rbac::require_admin(env, caller).unwrap_or_else(|_| panic!("Unauthorized"));
     }
@@ -189,7 +191,7 @@ impl MarketplaceContract {
     pub fn buy_agent(env: Env, listing_id: u64, buyer: Address) {
         buyer.require_auth();
 
-        // ─── SNAPSHOT PHASE ───
+        // â”€â”€â”€ SNAPSHOT PHASE â”€â”€â”€
         let listing_key = (Symbol::new(&env, "listing"), listing_id);
         let mut listing: Listing = env
             .storage()
@@ -202,7 +204,7 @@ impl MarketplaceContract {
         let _platform_fee_bps = Self::get_platform_fee(env.clone());
         let _royalty_info = Self::get_royalty(env.clone(), listing.agent_id);
 
-        // ─── VALIDATION PHASE ───
+        // â”€â”€â”€ VALIDATION PHASE â”€â”€â”€
         if validation::validate_nonzero_id(listing_id).is_err() {
             panic!("Invalid listing ID");
         }
@@ -215,7 +217,7 @@ impl MarketplaceContract {
             panic!("High-value sale requires multi-signature approval. Use propose_sale() first.");
         }
 
-        // ─── MUTATION PHASE ───
+        // â”€â”€â”€ MUTATION PHASE â”€â”€â”€
 
         // Process fee transition if active
         Self::process_fee_transition(env.clone());
@@ -888,7 +890,7 @@ impl MarketplaceContract {
 
     /// Execute approved fixed-price sale (internal function)
     fn execute_approved_listing_sale(env: Env, approval_id: u64, listing_id: u64) {
-        // ─── SNAPSHOT PHASE ───
+        // â”€â”€â”€ SNAPSHOT PHASE â”€â”€â”€
         let listing_key = (Symbol::new(&env, "listing"), listing_id);
         let mut listing: Listing = env
             .storage()
@@ -900,10 +902,10 @@ impl MarketplaceContract {
         let platform_fee_bps = Self::get_platform_fee(env.clone());
         let royalty_info = Self::get_royalty(env.clone(), listing.agent_id);
 
-        // ─── VALIDATION PHASE ───
+        // â”€â”€â”€ VALIDATION PHASE â”€â”€â”€
         // (Assuming approval status and expiry already checked in caller)
 
-        // ─── MUTATION PHASE ───
+        // â”€â”€â”€ MUTATION PHASE â”€â”€â”€
 
         // Process fee transition if active
         Self::process_fee_transition(env.clone());
@@ -947,16 +949,16 @@ impl MarketplaceContract {
     /// Execute approved auction sale (internal function)
     /// Execute approved auction sale (internal function)
     fn execute_approved_auction_sale(env: Env, approval_id: u64, auction_id: u64) {
-        // ─── SNAPSHOT PHASE ───
+        // â”€â”€â”€ SNAPSHOT PHASE â”€â”€â”€
         let mut auction = get_auction(&env, auction_id).expect("Auction not found");
         let approval = get_approval(&env, approval_id).expect("Approval not found");
         let platform_fee_bps = Self::get_platform_fee(env.clone());
         let royalty_info = Self::get_royalty(env.clone(), auction.agent_id);
         let now = env.ledger().timestamp();
 
-        // ─── VALIDATION PHASE ───
+        // â”€â”€â”€ VALIDATION PHASE â”€â”€â”€
 
-        // ─── MUTATION PHASE ───
+        // â”€â”€â”€ MUTATION PHASE â”€â”€â”€
 
         // Process fee transition if active
         Self::process_fee_transition(env.clone());
@@ -3180,5 +3182,307 @@ impl MarketplaceContract {
         }
 
         Ok(())
+    }
+
+    // ============ AMM INTEGRATION — MULTI-TOKEN PAYMENTS (Issue #245) ============
+
+    /// Set the AMM contract address (admin only).
+    ///
+    /// Must be called before `buy_agent_with_swap` is usable.
+    pub fn set_amm_contract(env: Env, admin: Address, amm_contract: Address) {
+        admin.require_auth();
+        Self::verify_admin(&env, &admin);
+
+        storage::set_amm_contract(&env, &amm_contract);
+
+        env.events().publish(
+            (Symbol::new(&env, "AmmContractSet"),),
+            (amm_contract,),
+        );
+    }
+
+    /// Get the configured AMM contract address.
+    pub fn get_amm_contract(env: Env) -> Option<Address> {
+        storage::get_amm_contract(&env)
+    }
+
+    /// Add a token to the list of tokens accepted for multi-token payment (admin only).
+    ///
+    /// Each accepted token must have a corresponding AMM pool that swaps it into
+    /// the marketplace's payment token. Pair it with a pool via `set_token_pool_id`.
+    pub fn add_accepted_token(env: Env, admin: Address, token: Address) {
+        admin.require_auth();
+        Self::verify_admin(&env, &admin);
+
+        let mut tokens = storage::get_accepted_tokens(&env);
+
+        // Idempotent — skip if already present.
+        for existing in tokens.iter() {
+            if existing == token {
+                return;
+            }
+        }
+
+        tokens.push_back(token.clone());
+        storage::set_accepted_tokens(&env, &tokens);
+
+        env.events().publish(
+            (Symbol::new(&env, "AcceptedTokenAdded"),),
+            (token,),
+        );
+    }
+
+    /// Remove a token from the accepted-payment list (admin only).
+    pub fn remove_accepted_token(env: Env, admin: Address, token: Address) {
+        admin.require_auth();
+        Self::verify_admin(&env, &admin);
+
+        let tokens = storage::get_accepted_tokens(&env);
+        let mut updated = Vec::new(&env);
+        for t in tokens.iter() {
+            if t != token {
+                updated.push_back(t.clone());
+            }
+        }
+        storage::set_accepted_tokens(&env, &updated);
+
+        env.events().publish(
+            (Symbol::new(&env, "AcceptedTokenRemoved"),),
+            (token,),
+        );
+    }
+
+    /// Return all tokens accepted for multi-token payment.
+    pub fn get_accepted_tokens(env: Env) -> Vec<Address> {
+        storage::get_accepted_tokens(&env)
+    }
+
+    /// Map an input token to its preferred AMM pool ID (admin only).
+    ///
+    /// This determines which pool the marketplace uses when a buyer pays with
+    /// `token` instead of the native payment token.
+    pub fn set_token_pool_id(env: Env, admin: Address, token: Address, pool_id: u64) {
+        admin.require_auth();
+        Self::verify_admin(&env, &admin);
+
+        storage::set_token_pool_id(&env, &token, pool_id);
+
+        env.events().publish(
+            (Symbol::new(&env, "TokenPoolMapped"),),
+            (token, pool_id),
+        );
+    }
+
+    /// Get the mapped AMM pool ID for a given input token.
+    pub fn get_token_pool_id(env: Env, token: Address) -> Option<u64> {
+        storage::get_token_pool_id(&env, &token)
+    }
+
+    /// Set per-user slippage tolerance in basis points (called by the user).
+    ///
+    /// Range: 0–5000 bps (0–50%). Defaults to 100 bps (1%) when not set.
+    pub fn set_user_slippage(env: Env, user: Address, slippage_bps: u32) {
+        user.require_auth();
+
+        assert!(
+            slippage_bps <= storage::MAX_SLIPPAGE_BPS,
+            "Slippage tolerance exceeds maximum (50%)"
+        );
+
+        storage::set_user_slippage_bps(&env, &user, slippage_bps);
+
+        env.events().publish(
+            (Symbol::new(&env, "UserSlippageSet"),),
+            (user, slippage_bps),
+        );
+    }
+
+    /// Return the caller's stored slippage tolerance in basis points.
+    pub fn get_user_slippage(env: Env, user: Address) -> u32 {
+        storage::get_user_slippage_bps(&env, &user)
+    }
+
+    /// Purchase an agent by paying with any token accepted by the AMM.
+    ///
+    /// # Flow (atomic — any panic reverts all state changes)
+    /// 1. Validate listing and that `token_in` is accepted.
+    /// 2. Transfer `amount_in` of `token_in` from `buyer` to this contract.
+    /// 3. Approve the AMM to spend those tokens from this contract.
+    /// 4. Cross-contract call: `amm.swap(self, pool_id, token_in, amount_in, min_out)`.
+    ///    The AMM pulls `token_in` and deposits the payment token back here.
+    /// 5. Assert swap delivered ≥ `listing.price` of the payment token.
+    /// 6. Refund any surplus payment tokens to the buyer.
+    /// 7. Create escrow holding exactly `listing.price`.
+    /// 8. Best-effort: auto-mint credit score NFT (never aborts the transaction).
+    ///
+    /// # Slippage protection
+    /// `min_out = listing.price * (10_000 - slippage_bps) / 10_000`.
+    /// The AMM's own `min_amount_out` guard ensures the swap reverts if price
+    /// impact + fees exceed the buyer's tolerance.
+    ///
+    /// Returns the `escrow_id` created for this purchase.
+    pub fn buy_agent_with_swap(
+        env: Env,
+        listing_id: u64,
+        buyer: Address,
+        token_in: Address,
+        amount_in: i128,
+    ) -> u64 {
+        buyer.require_auth();
+
+        // ── SNAPSHOT PHASE ──────────────────────────────────────────────────
+        let listing_key = (Symbol::new(&env, "listing"), listing_id);
+        let mut listing: Listing = env
+            .storage()
+            .instance()
+            .get(&listing_key)
+            .expect("Listing not found");
+
+        let payment_token = storage::get_payment_token(&env);
+        let approval_config = storage::get_approval_config(&env);
+        let escrow_config = storage::get_escrow_config(&env);
+        let amm_contract =
+            storage::get_amm_contract(&env).expect("AMM contract not configured");
+
+        // ── VALIDATION PHASE ────────────────────────────────────────────────
+        if validation::validate_nonzero_id(listing_id).is_err() {
+            panic!("Invalid listing ID");
+        }
+        if !listing.active {
+            panic!("Listing is not active");
+        }
+        if listing.price >= approval_config.threshold {
+            panic!("High-value sale requires multi-signature approval. Use propose_sale() first.");
+        }
+        if amount_in <= 0 {
+            panic!("amount_in must be positive");
+        }
+
+        // Verify token_in is in the accepted list.
+        let accepted = storage::get_accepted_tokens(&env);
+        let mut token_accepted = false;
+        for t in accepted.iter() {
+            if t == token_in {
+                token_accepted = true;
+                break;
+            }
+        }
+        if !token_accepted {
+            panic!("Payment token not in accepted list");
+        }
+
+        // Retrieve the pool that swaps token_in → payment_token.
+        let pool_id = storage::get_token_pool_id(&env, &token_in)
+            .expect("No pool configured for this token");
+
+        // Derive min_out: listing.price adjusted for buyer's slippage tolerance.
+        // min_out = listing.price * (10_000 - slippage_bps) / 10_000
+        let slippage_bps = storage::get_user_slippage_bps(&env, &buyer);
+        let min_out: i128 = (listing.price * (10_000i128 - slippage_bps as i128)) / 10_000;
+
+        // ── MUTATION PHASE ───────────────────────────────────────────────────
+
+        // Step 1: Pull token_in from buyer into this contract.
+        let token_in_client = token::Client::new(&env, &token_in);
+        token_in_client.transfer(&buyer, &env.current_contract_address(), &amount_in);
+
+        // Step 2: Approve AMM to spend token_in on behalf of this contract.
+        // The approval expires after 100 ledgers, scoped to this transaction window.
+        token_in_client.approve(
+            &env.current_contract_address(),
+            &amm_contract,
+            &amount_in,
+            &(env.ledger().sequence() + 100),
+        );
+
+        // Step 3: Execute the swap.
+        // The AMM pulls token_in from this contract and deposits payment_token back here.
+        // min_out serves as the on-chain slippage guard — the AMM panics (reverting
+        // the entire transaction) if the output would fall below this value.
+        let received: i128 = env.invoke_contract(
+            &amm_contract,
+            &Symbol::new(&env, "swap"),
+            Vec::from_array(
+                &env,
+                [
+                    env.current_contract_address().into_val(&env), // user = this contract
+                    pool_id.into_val(&env),
+                    token_in.clone().into_val(&env),
+                    amount_in.into_val(&env),
+                    min_out.into_val(&env),
+                ],
+            ),
+        );
+
+        // Step 4: Verify the swap delivered enough to cover the listing price.
+        assert!(
+            received >= listing.price,
+            "Swap output insufficient to cover listing price"
+        );
+
+        // Step 5: Return surplus payment tokens to buyer.
+        let excess = received - listing.price;
+        if excess > 0 {
+            let payment_client = token::Client::new(&env, &payment_token);
+            payment_client.transfer(&env.current_contract_address(), &buyer, &excess);
+        }
+
+        // Step 6: Apply any in-progress dynamic fee transition.
+        Self::process_fee_transition(env.clone());
+
+        // Step 7: Create escrow for listing.price in payment_token.
+        // The payment token is already held by this contract after the swap.
+        let escrow_id = storage::increment_escrow_counter(&env);
+        let now = env.ledger().timestamp();
+        let escrow = Escrow {
+            escrow_id,
+            listing_id,
+            agent_id: listing.agent_id,
+            buyer: buyer.clone(),
+            seller: listing.seller.clone(),
+            amount: listing.price,
+            created_at: now,
+            auto_release_at: now + escrow_config.auto_release_period_seconds,
+            status: EscrowStatus::Held,
+            dispute_resolved_at: None,
+            resolved_by: None,
+        };
+        storage::set_escrow(&env, &escrow);
+
+        // Step 8: Mark listing inactive.
+        listing.active = false;
+        env.storage().instance().set(&listing_key, &listing);
+
+        env.events().publish(
+            (Symbol::new(&env, "agent_purchased_via_swap"),),
+            (
+                listing_id,
+                escrow_id,
+                listing.agent_id,
+                buyer.clone(),
+                listing.seller.clone(),
+                listing.price,
+                token_in.clone(),
+                amount_in,
+                received,
+                escrow.auto_release_at,
+            ),
+        );
+
+        // Step 9: Best-effort credit score NFT; never aborts the transaction.
+        if let Err(e) =
+            Self::auto_mint_credit_on_purchase(env.clone(), listing_id, buyer.clone())
+        {
+            env.events().publish(
+                (Symbol::new(&env, "CreditScoreNFTMintFailed"),),
+                (
+                    listing_id,
+                    buyer,
+                    String::from_str(&env, error_description(e)),
+                ),
+            );
+        }
+
+        escrow_id
     }
 }

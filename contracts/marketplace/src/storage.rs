@@ -84,6 +84,11 @@ pub enum DataKey {
     RoyaltyPaymentRecord(u64),
     RoyaltyPaymentHistory(u64, u64), // (agent_id, history_index)
     RoyaltyPaymentHistoryCount(u64),
+    // AMM integration storage keys (Issue #245)
+    AmmContract,                  // Address of the AMM contract
+    AcceptedTokens,               // Vec<Address> of tokens accepted for multi-token payment
+    UserSlippageBps(Address),     // Per-user slippage tolerance in basis points
+    TokenPoolId(Address),         // Preferred pool_id for a given input token → payment_token
 }
 
 /* ---------------- ADMIN ---------------- */
@@ -1030,4 +1035,67 @@ pub fn get_royalty_payment_history_entry(env: &Env, agent_id: u64, index: u64) -
     env.storage()
         .instance()
         .get(&DataKey::RoyaltyPaymentHistory(agent_id, index))
+}
+
+/* ---------------- AMM INTEGRATION (Issue #245) ---------------- */
+
+/// Default slippage tolerance: 1% = 100 bps.
+pub const DEFAULT_SLIPPAGE_BPS: u32 = 100;
+
+/// Maximum allowed slippage tolerance: 50% = 5000 bps.
+pub const MAX_SLIPPAGE_BPS: u32 = 5000;
+
+/// Store the AMM contract address.
+pub fn set_amm_contract(env: &Env, amm: &Address) {
+    env.storage().instance().set(&DataKey::AmmContract, amm);
+}
+
+/// Retrieve the AMM contract address, if configured.
+pub fn get_amm_contract(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::AmmContract)
+}
+
+/// Store the full list of accepted input tokens for multi-token payment.
+pub fn set_accepted_tokens(env: &Env, tokens: &soroban_sdk::Vec<Address>) {
+    env.storage()
+        .instance()
+        .set(&DataKey::AcceptedTokens, tokens);
+}
+
+/// Retrieve the list of accepted input tokens.
+pub fn get_accepted_tokens(env: &Env) -> soroban_sdk::Vec<Address> {
+    env.storage()
+        .instance()
+        .get(&DataKey::AcceptedTokens)
+        .unwrap_or_else(|| soroban_sdk::Vec::new(env))
+}
+
+/// Set per-user slippage tolerance (in basis points).
+pub fn set_user_slippage_bps(env: &Env, user: &Address, slippage_bps: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::UserSlippageBps(user.clone()), &slippage_bps);
+}
+
+/// Get per-user slippage tolerance; defaults to DEFAULT_SLIPPAGE_BPS.
+pub fn get_user_slippage_bps(env: &Env, user: &Address) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::UserSlippageBps(user.clone()))
+        .unwrap_or(DEFAULT_SLIPPAGE_BPS)
+}
+
+/// Map an input token address to a preferred AMM pool ID.
+/// This enables single-hop swaps when the pool is known in advance.
+pub fn set_token_pool_id(env: &Env, token: &Address, pool_id: u64) {
+    env.storage()
+        .instance()
+        .set(&DataKey::TokenPoolId(token.clone()), &pool_id);
+}
+
+/// Retrieve the preferred pool ID for a given input token.
+pub fn get_token_pool_id(env: &Env, token: &Address) -> Option<u64> {
+    env.storage()
+        .instance()
+        .get(&DataKey::TokenPoolId(token.clone()))
 }
